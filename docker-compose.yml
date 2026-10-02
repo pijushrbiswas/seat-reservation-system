@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seats
+      POSTGRES_PASSWORD: seats
+      POSTGRES_DB: seats
+    ports:
+      - "5433:5432"
+    command: ["postgres", "-c", "max_connections=200"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seats -d seats"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://seats:seats@postgres:5432/seats
+      REDIS_URL: redis://redis:6379
+      REDIS_ENABLED: "true"
+      JWT_SECRET: dev-jwt-secret-change-me
+      ADMIN_TOKEN: dev-admin-token
+    ports:
+      - "8080:8080"
