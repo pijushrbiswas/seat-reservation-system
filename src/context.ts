@@ -11,5 +11,4 @@ export interface Ctx {
   metrics: Metrics;
   ring: LogRing;
   log: FastifyBaseLogger;
-  redisStatus: () => "ok" | "down" | "disabled";
 }

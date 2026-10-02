@@ -18,7 +18,6 @@ const ctx: Ctx = {
   metrics: createMetrics(pool),
   ring,
   log,
-  redisStatus: () => "disabled",
 };
 
 const app = await buildApp(ctx);

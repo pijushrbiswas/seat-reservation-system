@@ -15,8 +15,6 @@ function bool(name: string, fallback: boolean): boolean {
 export interface Config {
   port: number;
   databaseUrl: string;
-  redisUrl: string | undefined;
-  redisEnabled: boolean;
   jwtSecret: string;
   adminToken: string;
   logsToken: string | undefined;
@@ -25,7 +23,6 @@ export interface Config {
   pgSsl: boolean;
   defaultPerUserLimit: number;
   migrationsDir: string;
-  seatCacheTtlSeconds: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -35,12 +32,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!jwtSecret) throw new Error("JWT_SECRET is required");
   const adminToken = env.ADMIN_TOKEN;
   if (!adminToken) throw new Error("ADMIN_TOKEN is required");
-  const redisUrl = env.REDIS_URL || undefined;
   return {
     port: int("PORT", 8080),
     databaseUrl,
-    redisUrl,
-    redisEnabled: bool("REDIS_ENABLED", true) && redisUrl !== undefined,
     jwtSecret,
     adminToken,
     logsToken: env.LOGS_TOKEN || undefined,
@@ -49,6 +43,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pgSsl: bool("PG_SSL", false),
     defaultPerUserLimit: int("DEFAULT_PER_USER_LIMIT", 4),
     migrationsDir: env.MIGRATIONS_DIR ?? "migrations",
-    seatCacheTtlSeconds: int("SEAT_CACHE_TTL_SECONDS", 30),
   };
 }

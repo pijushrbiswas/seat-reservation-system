@@ -43,8 +43,6 @@ export interface ShowBody {
 export async function makeApp(env: Record<string, string> = {}): Promise<TestApp> {
   const config = loadConfig({
     DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgres://seats:seats@localhost:5433/seats",
-    REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6380",
-    REDIS_ENABLED: "false",
     JWT_SECRET: "test-jwt-secret",
     ADMIN_TOKEN,
     LOG_LEVEL: "silent",
@@ -63,7 +61,6 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
     metrics: createMetrics(pool),
     ring,
     log,
-    redisStatus: () => "disabled",
   };
   const app = await buildApp(ctx);
   await app.ready();
