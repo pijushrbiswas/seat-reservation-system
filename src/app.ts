@@ -7,7 +7,9 @@ import { healthRoutes } from "./routes/health.js";
 import { opsRoutes } from "./routes/ops.js";
 import { authRoutes } from "./routes/auth.js";
 import { showRoutes } from "./routes/shows.js";
+import { reservationRoutes } from "./routes/reservations.js";
 import { createAuth } from "./auth.js";
+import { ReservationService } from "./services/reservations.js";
 import { ShowService } from "./services/shows.js";
 
 declare module "fastify" {
@@ -106,10 +108,12 @@ export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
 
   const auth = createAuth(ctx.config);
   const shows = new ShowService(ctx.pool, ctx.config);
+  const reservations = new ReservationService(ctx.pool, shows, ctx.metrics);
 
   healthRoutes(app, ctx);
   opsRoutes(app, ctx);
   authRoutes(app, auth);
   showRoutes(app, auth, shows);
+  reservationRoutes(app, auth, reservations);
   return app;
 }
