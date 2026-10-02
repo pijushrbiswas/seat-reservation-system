@@ -52,4 +52,11 @@ export function reservationRoutes(app: FastifyInstance, auth: Auth, reservations
       }
     },
   );
+
+  app.post<{ Params: { id: string } }>("/reservations/:id/cancel", async (req, reply) => {
+    const userId = auth.requireUser(req);
+    const { changed, reservation } = await reservations.cancel(userId, req.params.id);
+    req.outcome = changed ? "cancelled" : "already_cancelled";
+    return reply.code(200).send(reservation);
+  });
 }

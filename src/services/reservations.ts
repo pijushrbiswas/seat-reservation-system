@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
 import { withTx } from "../db.js";
-import { DeclineError } from "../errors.js";
+import { DeclineError, forbidden, notFound } from "../errors.js";
+import { isUuid } from "./shows.js";
 import type { Metrics } from "../metrics.js";
 import type { ShowService } from "./shows.js";
 
@@ -143,6 +144,63 @@ export class ReservationService {
         },
       };
     });
+  }
+
+  /**
+   * Cancels a confirmed reservation and returns its seats to available. Only the owner may cancel.
+   * Lock order: reservation row, then the user's quota row, then seat rows (sorted) - consistent
+   * with reserve (quota row, then seats), so the two can never deadlock. Seats are released only
+   * where they still point at this reservation, so a cancel can never free a seat held by someone else.
+   */
+  async cancel(userId: string, reservationId: string): Promise<{ changed: boolean; reservation: ReservationView }> {
+    if (!isUuid(reservationId)) throw notFound("reservation");
+    const result = await withTx(this.pool, async (db) => {
+      const { rows } = await db.query<{
+        id: string;
+        show_id: string;
+        user_id: string;
+        seats: string[];
+        amount_paise: number;
+        status: "confirmed" | "cancelled";
+      }>(
+        `SELECT id, show_id, user_id, seats, amount_paise, status FROM reservations WHERE id = $1 FOR UPDATE`,
+        [reservationId],
+      );
+      const row = rows[0];
+      if (!row) throw notFound("reservation");
+      if (row.user_id !== userId) throw forbidden("only the owner can cancel a reservation");
+      const view: ReservationView = {
+        reservation_id: row.id,
+        show_id: row.show_id,
+        user_id: row.user_id,
+        seats: row.seats,
+        amount_paise: row.amount_paise,
+        status: row.status,
+      };
+      if (row.status === "cancelled") return { changed: false, reservation: view };
+
+      await db.query(
+        `UPDATE user_show_holdings SET held_count = held_count - $3 WHERE show_id = $1 AND user_id = $2`,
+        [row.show_id, userId, row.seats.length],
+      );
+      const locked = await db.query(
+        `SELECT label FROM seats
+          WHERE show_id = $1 AND reservation_id = $2
+          ORDER BY label COLLATE "C"
+            FOR UPDATE`,
+        [row.show_id, row.id],
+      );
+      if (locked.rowCount !== row.seats.length) throw new Error("invariant: reservation seats missing");
+      await db.query(
+        `UPDATE seats SET status = 'available', reservation_id = NULL, user_id = NULL
+          WHERE show_id = $1 AND reservation_id = $2`,
+        [row.show_id, row.id],
+      );
+      await db.query(`UPDATE reservations SET status = 'cancelled', cancelled_at = now() WHERE id = $1`, [row.id]);
+      return { changed: true, reservation: { ...view, status: "cancelled" as const } };
+    });
+    if (result.changed) this.metrics.cancelled.inc();
+    return result;
   }
 
   private async replay(db: pg.PoolClient, input: ReserveInput, requestHash: string): Promise<ReserveResult> {

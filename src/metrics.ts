@@ -59,16 +59,6 @@ export function createMetrics(pool: pg.Pool) {
     help: "Reservations cancelled by their owner",
     registers: [registry],
   });
-  const cacheDeclines = new client.Counter({
-    name: "seat_cache_declines_total",
-    help: "Reserve requests declined by the Redis fast path without touching Postgres",
-    registers: [registry],
-  });
-  const cacheErrors = new client.Counter({
-    name: "seat_cache_errors_total",
-    help: "Redis fast-path errors (the request falls through to Postgres)",
-    registers: [registry],
-  });
 
   let statsCache: { at: number; promise: Promise<ShowStat[]> } | undefined;
   const loadStats = (): Promise<ShowStat[]> => {
@@ -138,7 +128,7 @@ export function createMetrics(pool: pg.Pool) {
     },
   });
 
-  return { registry, httpRequests, httpDuration, inflight, confirmed, declined, cancelled, cacheDeclines, cacheErrors };
+  return { registry, httpRequests, httpDuration, inflight, confirmed, declined, cancelled };
 }
 
 export type Metrics = ReturnType<typeof createMetrics>;
