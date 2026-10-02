@@ -97,8 +97,7 @@ Behaviour worth knowing:
 `ADMIN_TOKEN` are generated; read `ADMIN_TOKEN` from the service's environment tab to run the burst. For an external
 database (Neon, Supabase, ...) set `DATABASE_URL` and `PG_SSL=true`. The container listens first and reports `/readyz` 503
 until the database answers and migrations finish, so a cold start comes up healthy on its own.
-Run a single instance for the fast path described in the write-up; more instances are safe (all decisions live in Postgres)
-but `/metrics` and `/logs` are per instance.
+More than one instance is safe (every decision is made in Postgres), but `/metrics` and `/logs` are per instance.
 
 ## Layout
 
