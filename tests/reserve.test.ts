@@ -67,8 +67,8 @@ describe("reserve", () => {
   it("is all-or-nothing for multi-seat requests", async () => {
     const show = await t.createShow(["A1", "A2", "A3"]);
     const [a, b] = [await t.token("alice"), await t.token("bob")];
-    expect((await t.reserve(a, show.id, ["A2"], "ka")).status).toBe(201);
-    const partial = await t.reserve(b, show.id, ["A1", "A2", "A3"], "kb");
+    expect((await t.reserve(a, show.id, ["A2"], "aon-a")).status).toBe(201);
+    const partial = await t.reserve(b, show.id, ["A1", "A2", "A3"], "aon-b");
     expect(partial.status).toBe(409);
     expect(partial.body.error.seats).toEqual(["A2"]);
     const after = await t.show(show.id);
@@ -184,5 +184,107 @@ describe("per-user limit", () => {
     expect(perUser.size).toBe(10);
     for (const n of perUser.values()) expect(n).toBe(4);
     expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
+  });
+});
+
+describe("idempotency", () => {
+  it("a retry with the same key returns the original reservation and moves nothing", async () => {
+    const show = await t.createShow(seatNames("I", 5));
+    const tok = await t.token("retrier");
+    const first = await t.reserve(tok, show.id, ["I1"], "same-key");
+    const retry = await t.reserve(tok, show.id, ["I1"], "same-key");
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(200);
+    expect(retry.body).toEqual(first.body);
+    const after = await t.show(show.id);
+    expect(after.confirmed).toBe(1);
+  });
+
+  it("the same key with different seats is rejected with 409", async () => {
+    const show = await t.createShow(seatNames("I", 5));
+    const tok = await t.token("confused");
+    expect((await t.reserve(tok, show.id, ["I1"], "k")).status).toBe(201);
+    const bad = await t.reserve(tok, show.id, ["I2"], "k");
+    expect(bad.status).toBe(409);
+    expect(bad.body.error.code).toBe("idempotency_key_conflict");
+    expect((await t.show(show.id)).confirmed).toBe(1);
+  });
+
+  it("seat order and duplicates do not change the request identity", async () => {
+    const show = await t.createShow(seatNames("I", 5));
+    const tok = await t.token("orderly");
+    const a = await t.reserve(tok, show.id, ["I2", "I1"], "k");
+    const b = await t.reserve(tok, show.id, ["I1", "I2", "I1"], "k");
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(200);
+    expect(b.body.reservation_id).toBe(a.body.reservation_id);
+  });
+
+  it("50 parallel requests with one key create exactly one reservation", async () => {
+    const show = await t.createShow(seatNames("I", 5));
+    const tok = await t.token("doubleclick");
+    const results = await Promise.all(Array.from({ length: 50 }, () => t.reserve(tok, show.id, ["I3", "I4"], "burst-key")));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 200)).toHaveLength(49);
+    expect(new Set(results.map((r) => r.body.reservation_id)).size).toBe(1);
+    const after = await t.show(show.id);
+    expect(after.confirmed).toBe(2);
+  });
+
+  it("parallel same key, different seats: one winner, the rest 409", async () => {
+    const show = await t.createShow(seatNames("I", 10));
+    const tok = await t.token("mixed");
+    const results = await Promise.all(
+      seatNames("I", 10).map((seat) => t.reserve(tok, show.id, [seat], "shared-key")),
+    );
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(9);
+    expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
+    expect((await t.show(show.id)).confirmed).toBe(1);
+  });
+
+  it("keys are scoped per user", async () => {
+    const show = await t.createShow(seatNames("I", 5));
+    const [a, b] = [await t.token("u-a"), await t.token("u-b")];
+    expect((await t.reserve(a, show.id, ["I1"], "shared")).status).toBe(201);
+    const other = await t.reserve(b, show.id, ["I2"], "shared");
+    expect(other.status).toBe(201);
+    expect(other.body.user_id).toBe("u-b");
+  });
+
+  it("a declined request does not consume its key", async () => {
+    const show = await t.createShow(["I1"]);
+    const [a, b] = [await t.token("holder"), await t.token("waiter")];
+    expect((await t.reserve(a, show.id, ["I1"], "ka")).status).toBe(201);
+    expect((await t.reserve(b, show.id, ["I1"], "kb")).status).toBe(409);
+    const again = await t.reserve(b, show.id, ["I1"], "kb");
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe("seat_taken");
+  });
+
+  it("accepts the key via the Idempotency-Key header and rejects a missing key", async () => {
+    const show = await t.createShow(seatNames("I", 3));
+    const tok = await t.token("header-user");
+    const headers = { authorization: `Bearer ${tok}`, "idempotency-key": t.key("hdr-1") };
+    const one = await t.app.inject({ method: "POST", url: `/shows/${show.id}/reserve`, headers, payload: { seats: ["I1"] } });
+    const two = await t.app.inject({ method: "POST", url: `/shows/${show.id}/reserve`, headers, payload: { seats: ["I1"] } });
+    expect(one.statusCode).toBe(201);
+    expect(two.statusCode).toBe(200);
+    expect(two.headers["idempotent-replayed"]).toBe("true");
+    const none = await t.app.inject({
+      method: "POST",
+      url: `/shows/${show.id}/reserve`,
+      headers: { authorization: `Bearer ${tok}` },
+      payload: { seats: ["I2"] },
+    });
+    expect(none.statusCode).toBe(400);
+  });
+
+  it("a replay still works when the user is at their limit", async () => {
+    const show = await t.createShow(seatNames("I", 6), { per_user_limit: 2 });
+    const tok = await t.token("capped");
+    const first = await t.reserve(tok, show.id, ["I1", "I2"], "k");
+    expect(first.status).toBe(201);
+    expect((await t.reserve(tok, show.id, ["I1", "I2"], "k")).status).toBe(200);
   });
 });

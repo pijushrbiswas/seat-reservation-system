@@ -8,6 +8,10 @@ import { createMetrics } from "../src/metrics.js";
 
 export const ADMIN_TOKEN = "test-admin-token";
 
+// Idempotency keys are scoped per user and the test DB persists across runs,
+// so namespace every key with a per-process run id.
+const RUN_ID = Math.random().toString(36).slice(2, 10);
+
 export interface TestApp {
   app: FastifyInstance;
   ctx: Ctx;
@@ -16,6 +20,7 @@ export interface TestApp {
   token(userId: string): Promise<string>;
   createShow(seats: string[], opts?: { price_paise?: number; per_user_limit?: number }): Promise<ShowBody>;
   reserve(token: string, showId: string, seats: string[], key: string, extra?: Record<string, unknown>): Promise<Res>;
+  key(k: string): string;
   cancel(token: string, reservationId: string): Promise<Res>;
   show(showId: string, seats?: boolean): Promise<ShowBody>;
 }
@@ -104,8 +109,9 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
       if (r.status !== 201) throw new Error(`create show failed: ${r.status} ${JSON.stringify(r.body)}`);
       return r.body as ShowBody;
     },
+    key: (k) => `${RUN_ID}:${k}`,
     reserve: (token, showId, seats, key, extra = {}) =>
-      call("POST", `/shows/${showId}/reserve`, { token, body: { seats, idempotency_key: key, ...extra } }),
+      call("POST", `/shows/${showId}/reserve`, { token, body: { seats, idempotency_key: `${RUN_ID}:${key}`, ...extra } }),
     cancel: (token, id) => call("POST", `/reservations/${id}/cancel`, { token }),
     async show(showId, seats = true) {
       const r = await call("GET", `/shows/${showId}?seats=${seats}`);

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
 import { withTx } from "../db.js";
 import { DeclineError } from "../errors.js";
@@ -18,6 +18,7 @@ export interface ReserveInput {
   userId: string;
   showId: string;
   seats: string[];
+  idempotencyKey: string;
 }
 
 export interface ReserveResult {
@@ -35,7 +36,8 @@ export class ReservationService {
   async reserve(input: ReserveInput): Promise<ReserveResult> {
     try {
       const result = await this.reserveInner(input);
-      this.metrics.confirmed.inc();
+      if (result.replay) this.metrics.declined.inc({ reason: "idempotent_replay" });
+      else this.metrics.confirmed.inc();
       return result;
     } catch (err) {
       if (err instanceof DeclineError) this.metrics.declined.inc({ reason: err.reason });
@@ -49,6 +51,7 @@ export class ReservationService {
     // multi-seat requests over overlapping seats can never deadlock.
     const labels = [...new Set(input.seats)].sort();
     const reservationId = randomUUID();
+    const requestHash = createHash("sha256").update(`${show.id}\n${labels.join("\n")}`).digest("hex");
 
     if (labels.length > show.per_user_limit) {
       throw new DeclineError(
@@ -59,7 +62,19 @@ export class ReservationService {
     }
 
     return withTx(this.pool, async (db) => {
-      // Lock order is always: per-user counter row, then seat rows (sorted).
+      // Idempotency gate (first lock taken). The (user_id, key) primary key means a concurrent
+      // request with the same key blocks here until the first transaction commits or rolls back,
+      // so one key can only ever produce one reservation. Declines roll the whole transaction
+      // back, which releases the key: only a successful reservation consumes it.
+      const claimed = await db.query(
+        `INSERT INTO idempotency_keys (user_id, key, show_id, request_hash)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, key) DO NOTHING`,
+        [input.userId, input.idempotencyKey, show.id, requestHash],
+      );
+      if (claimed.rowCount === 0) return this.replay(db, input, requestHash);
+
+      // Lock order is always: idempotency row, per-user counter row, then seat rows (sorted).
       // A single conditional upsert both checks and takes the quota, atomically; concurrent
       // requests from one user serialise on this row, so parallel reserves cannot overshoot.
       const quota = await db.query<{ held_count: number }>(
@@ -111,6 +126,10 @@ export class ReservationService {
         [show.id, labels, reservationId, input.userId],
       );
       if (upd.rowCount !== labels.length) throw new Error("invariant: locked seats changed under us");
+      await db.query(
+        `UPDATE idempotency_keys SET reservation_id = $3 WHERE user_id = $1 AND key = $2`,
+        [input.userId, input.idempotencyKey, reservationId],
+      );
 
       return {
         replay: false,
@@ -124,5 +143,42 @@ export class ReservationService {
         },
       };
     });
+  }
+
+  private async replay(db: pg.PoolClient, input: ReserveInput, requestHash: string): Promise<ReserveResult> {
+    const { rows } = await db.query<{
+      request_hash: string;
+      id: string;
+      show_id: string;
+      user_id: string;
+      seats: string[];
+      amount_paise: number;
+      status: "confirmed" | "cancelled";
+    }>(
+      `SELECT k.request_hash, r.id, r.show_id, r.user_id, r.seats, r.amount_paise, r.status
+         FROM idempotency_keys k JOIN reservations r ON r.id = k.reservation_id
+        WHERE k.user_id = $1 AND k.key = $2`,
+      [input.userId, input.idempotencyKey],
+    );
+    const row = rows[0];
+    if (!row) throw new Error("invariant: idempotency key without reservation");
+    if (row.request_hash !== requestHash) {
+      throw new DeclineError(
+        "idempotency_key_conflict",
+        "idempotency key was already used with a different request",
+        { reservation_id: row.id },
+      );
+    }
+    return {
+      replay: true,
+      reservation: {
+        reservation_id: row.id,
+        show_id: row.show_id,
+        user_id: row.user_id,
+        seats: row.seats,
+        amount_paise: row.amount_paise,
+        status: row.status,
+      },
+    };
   }
 }
