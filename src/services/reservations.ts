@@ -50,7 +50,35 @@ export class ReservationService {
     const labels = [...new Set(input.seats)].sort();
     const reservationId = randomUUID();
 
+    if (labels.length > show.per_user_limit) {
+      throw new DeclineError(
+        "per_user_limit",
+        `at most ${show.per_user_limit} seats per user for this show`,
+        { limit: show.per_user_limit },
+      );
+    }
+
     return withTx(this.pool, async (db) => {
+      // Lock order is always: per-user counter row, then seat rows (sorted).
+      // A single conditional upsert both checks and takes the quota, atomically; concurrent
+      // requests from one user serialise on this row, so parallel reserves cannot overshoot.
+      const quota = await db.query<{ held_count: number }>(
+        `INSERT INTO user_show_holdings (show_id, user_id, held_count)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (show_id, user_id) DO UPDATE
+           SET held_count = user_show_holdings.held_count + EXCLUDED.held_count
+         WHERE user_show_holdings.held_count + EXCLUDED.held_count <= $4
+         RETURNING held_count`,
+        [show.id, input.userId, labels.length, show.per_user_limit],
+      );
+      if (quota.rowCount === 0) {
+        throw new DeclineError(
+          "per_user_limit",
+          `at most ${show.per_user_limit} seats per user for this show`,
+          { limit: show.per_user_limit },
+        );
+      }
+
       // The decision point. FOR UPDATE makes concurrent requests for a seat queue on its row
       // lock; the loser re-reads the committed row after the winner commits and sees it taken.
       const { rows } = await db.query<{ label: string; status: string }>(

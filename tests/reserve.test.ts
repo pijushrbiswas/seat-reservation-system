@@ -129,3 +129,60 @@ describe("reserve under concurrency", () => {
     expect(after.confirmed).toBe(won.length);
   });
 });
+
+describe("per-user limit", () => {
+  it("declines a single request above the limit with 409 per_user_limit", async () => {
+    const show = await t.createShow(seatNames("L", 10), { per_user_limit: 4 });
+    const tok = await t.token("greedy");
+    const r = await t.reserve(tok, show.id, seatNames("L", 5), "k");
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe("per_user_limit");
+    expect((await t.show(show.id)).confirmed).toBe(0);
+  });
+
+  it("counts across requests", async () => {
+    const show = await t.createShow(seatNames("L", 10), { per_user_limit: 4 });
+    const tok = await t.token("steady");
+    expect((await t.reserve(tok, show.id, ["L1", "L2", "L3"], "k1")).status).toBe(201);
+    const over = await t.reserve(tok, show.id, ["L4", "L5"], "k2");
+    expect(over.status).toBe(409);
+    expect(over.body.error.code).toBe("per_user_limit");
+    expect((await t.reserve(tok, show.id, ["L4"], "k3")).status).toBe(201);
+    expect((await t.reserve(tok, show.id, ["L5"], "k4")).body.error.code).toBe("per_user_limit");
+    // The failed attempts must not have leaked seats or quota.
+    const after = await t.show(show.id);
+    expect(after.confirmed).toBe(4);
+    assertReconciled(after);
+  });
+
+  it("10 parallel reserves by one user on limit=4 end with at most 4 held", async () => {
+    const show = await t.createShow(seatNames("P", 20), { per_user_limit: 4 });
+    const tok = await t.token("stampeder");
+    const results = await Promise.all(seatNames("P", 10).map((seat, i) => t.reserve(tok, show.id, [seat], `par-${i}`)));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(4);
+    expect(results.filter((r) => r.status === 409 && r.body.error.code === "per_user_limit")).toHaveLength(6);
+    expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
+    const after = await t.show(show.id);
+    expect(after.confirmed).toBe(4);
+    assertReconciled(after);
+  });
+
+  it("many users each firing parallel reserves: nobody exceeds the limit", async () => {
+    const show = await t.createShow(seatNames("Q", 100), { per_user_limit: 4 });
+    const users = await Promise.all(Array.from({ length: 10 }, (_, i) => t.token(`multi-${i}`)));
+    const results = await Promise.all(
+      users.flatMap((tok, u) =>
+        seatNames("Q", 100)
+          .slice(u * 10, u * 10 + 10)
+          .map((seat, i) => t.reserve(tok, show.id, [seat], `m-${u}-${i}`)),
+      ),
+    );
+    const perUser = new Map<string, number>();
+    for (const r of results.filter((x) => x.status === 201)) {
+      perUser.set(r.body.user_id, (perUser.get(r.body.user_id) ?? 0) + 1);
+    }
+    expect(perUser.size).toBe(10);
+    for (const n of perUser.values()) expect(n).toBe(4);
+    expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
+  });
+});
