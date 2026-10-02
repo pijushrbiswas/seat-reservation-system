@@ -4,6 +4,9 @@ import pg from "pg";
 import type { Config } from "./config.js";
 import { unavailable } from "./errors.js";
 
+// bigint columns (money in paise, counts) stay well below 2^53.
+pg.types.setTypeParser(20, (v) => Number(v));
+
 export type Db = pg.PoolClient;
 
 export function createPool(config: Config): pg.Pool {

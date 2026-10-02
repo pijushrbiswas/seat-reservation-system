@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { Ctx } from "./context.js";
 import { AppError } from "./errors.js";
 import { isConnectionError } from "./db.js";
 import { healthRoutes } from "./routes/health.js";
 import { opsRoutes } from "./routes/ops.js";
+import { authRoutes } from "./routes/auth.js";
+import { showRoutes } from "./routes/shows.js";
+import { createAuth } from "./auth.js";
+import { ShowService } from "./services/shows.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -19,8 +23,7 @@ const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: ctx.log,
-    disableRequestLogging: true,
-    requestIdLogLabel: "request_id",
+    logController: new LogController({ disableRequestLogging: true, requestIdLogLabel: "request_id" }),
     genReqId: (req) => {
       const given = req.headers["x-request-id"];
       return typeof given === "string" && REQUEST_ID_RE.test(given) ? given : randomUUID();
@@ -101,7 +104,12 @@ export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
       .send({ error: { code: "not_found", message: "route not found", request_id: req.id } });
   });
 
+  const auth = createAuth(ctx.config);
+  const shows = new ShowService(ctx.pool, ctx.config);
+
   healthRoutes(app, ctx);
   opsRoutes(app, ctx);
+  authRoutes(app, auth);
+  showRoutes(app, auth, shows);
   return app;
 }
