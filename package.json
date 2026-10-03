@@ -17,6 +17,7 @@
   "dependencies": {
     "fast-jwt": "^6.3.3",
     "fastify": "^5.12.5",
+    "ioredis": "^6.0.0",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
     "prom-client": "^15.1.3"

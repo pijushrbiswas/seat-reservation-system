@@ -8,9 +8,9 @@ install:
 build:
 	npm run build
 
-# Postgres on localhost:5433 for local dev and tests
+# Postgres (localhost:5433) and Redis (localhost:6380) for local dev and tests
 deps:
-	docker compose up -d --wait postgres
+	docker compose up -d --wait postgres redis
 
 # Full stack in containers: app on http://localhost:8080
 up:

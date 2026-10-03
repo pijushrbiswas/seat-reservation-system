@@ -14,14 +14,29 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    # A cache/lease layer only: Postgres is the source of truth, so no persistence is needed.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   app:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       PORT: "8080"
       DATABASE_URL: postgres://seats:seats@postgres:5432/seats
+      REDIS_URL: redis://redis:6379
       JWT_SECRET: dev-jwt-secret-change-me
       ADMIN_TOKEN: dev-admin-token
     ports:
