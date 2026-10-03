@@ -426,7 +426,7 @@ async function identityAndCancel(): Promise<void> {
 /** Runs the phases in order after confirming the target is ready, then prints the summary and sets the exit code. */
 async function main(): Promise<void> {
   console.log(`target ${base.origin}  (scale=${scale} concurrency=${CONCURRENCY})`);
-  const ready = await sendRequest("GET", "/readyz");
+  const ready = await sendRequest("GET", "/health");
   if (ready.status !== 200) {
     console.error(`target not ready: status=${ready.status} ${ready.error ?? JSON.stringify(ready.body)}`);
     process.exit(2);

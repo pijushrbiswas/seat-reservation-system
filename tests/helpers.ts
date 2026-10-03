@@ -66,7 +66,7 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
   const ring = new LogRing(1000);
   const log = createLogger(config.logLevel, ring);
   const events = new EventBus();
-  const metrics = createMetrics(new ShowStatsRepository(pool), pool);
+  const metrics = createMetrics(new ShowStatsRepository(pool), pool, config.metricsMaxShows);
   const cache = new SeatCache(config, events);
   await cache.waitUntilReady(1500);
   const ctx: Ctx = {

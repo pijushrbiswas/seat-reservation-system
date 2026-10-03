@@ -41,7 +41,7 @@ export function createMainPool(config: Config): pg.Pool {
 }
 
 /**
- * Creates a tiny separate pool for readiness checks, so `/readyz` reflects "is the database reachable" and not "is the main pool saturated".
+ * Creates a tiny separate pool for readiness checks, so `/health` reflects "is the database reachable" and not "is the main pool saturated".
  * @param config - Supplies the URL and TLS setting.
  */
 export function createReadinessPool(config: Config): pg.Pool {

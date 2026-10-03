@@ -40,12 +40,19 @@ export class LogRing {
 }
 
 /**
- * Creates the structured JSON logger, writing each line to stdout (for the platform's log viewer) and into the ring buffer.
+ * Creates the structured JSON logger, writing each line to stdout (for the platform's log viewer), into the ring buffer,
+ * and to any extra streams (for example the New Relic shipper).
  * @param level - Minimum level to emit.
  * @param ring - Buffer that also receives every line.
  * @param destination - Alternative to stdout, for tests.
+ * @param extraStreams - Further streams that receive every line.
  */
-export function createLogger(level: string, ring: LogRing, destination?: NodeJS.WritableStream): Logger {
+export function createLogger(
+  level: string,
+  ring: LogRing,
+  destination?: NodeJS.WritableStream,
+  extraStreams: NodeJS.WritableStream[] = [],
+): Logger {
   const ringStream = new Writable({
     write(chunk, _enc, cb) {
       ring.addLine(chunk.toString().trimEnd());
@@ -63,6 +70,7 @@ export function createLogger(level: string, ring: LogRing, destination?: NodeJS.
     pino.multistream([
       { stream: destination ?? process.stdout },
       { stream: ringStream },
+      ...extraStreams.map((stream) => ({ stream })),
     ]),
   );
 }

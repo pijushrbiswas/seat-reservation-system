@@ -12,7 +12,7 @@ export interface Ctx {
   config: Config;
   /** Main Postgres pool used by all request handling. */
   pool: pg.Pool;
-  /** Small separate pool used only by `/readyz`, so readiness is not starved by a burst. */
+  /** Small separate pool used only by the `/health` readiness probe, so readiness is not starved by a burst. */
   healthPool: pg.Pool;
   /** Prometheus registry and counters. */
   metrics: Metrics;

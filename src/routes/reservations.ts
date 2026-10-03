@@ -7,7 +7,8 @@ import type { ReservationService } from "../services/reservations.js";
 const SEAT_LABEL_PATTERN = "^[A-Za-z0-9_.-]{1,32}$";
 
 /**
- * Registers `POST /shows/:id/reserve` (201 new, 200 idempotent replay, 409 clean decline) and `POST /reservations/:id/cancel` (owner only).
+ * Registers `POST /shows/:id/reserve` (201 new, 200 idempotent replay, 409 clean decline) and `POST /reservations/:id/cancel` (owner only;
+ * a repeat cancel returns 200 with an `Idempotent-Replayed: true` header and changes nothing).
  * The user id always comes from the verified token; one in the body is ignored. The idempotency key may be a header or a body field.
  * @param app - Fastify instance.
  * @param auth - User authentication.
@@ -65,6 +66,7 @@ export function registerReservationRoutes(app: FastifyInstance, auth: Auth, rese
     const userId = auth.requireUser(req);
     const { changed, reservation } = await reservations.cancelReservation(userId, req.params.id);
     req.outcome = changed ? "cancelled" : "already_cancelled";
+    if (!changed) reply.header("idempotent-replayed", "true");
     return reply.code(200).send(reservation);
   });
 }

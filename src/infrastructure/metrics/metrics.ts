@@ -13,17 +13,15 @@ export const DECLINE_REASONS = [
 /** One of {@link DECLINE_REASONS}. */
 export type MetricDecline = (typeof DECLINE_REASONS)[number];
 
-/** How many of the newest shows get per-show seat gauges, to keep metric cardinality bounded. */
-const MAX_SHOWS_IN_GAUGES = 20;
-
 /**
  * Builds the Prometheus registry: HTTP, reservation and Redis counters, pool gauges, and per-show seat gauges.
  * The seat gauges are not kept in memory; they are read from Postgres (plus Redis for held seats) at scrape time and cached for one second,
  * so they always reconcile with the API.
  * @param stats - Database access for the seat gauges.
  * @param pool - Main Postgres pool, whose connection counts are exported as a gauge.
+ * @param maxShows - How many of the newest shows get per-show seat gauges; 0 (the default) means every show.
  */
-export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool) {
+export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool, maxShows = 0) {
   const registry = new client.Registry();
   client.collectDefaultMetrics({ register: registry });
 
@@ -75,18 +73,18 @@ export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool) {
   });
 
   // Held seats live in Redis, so the gauges ask it which available seats are currently held.
-  let heldSource: { listHeldSeats(show: string): Promise<string[]> } | undefined;
+  let heldSource: { listHeldSeatsForShows(shows: string[]): Promise<string[][]> } | undefined;
 
   let statsCache: { at: number; promise: Promise<ShowStat[]> } | undefined;
   const loadShowSeatStats = (): Promise<ShowStat[]> => {
     const now = Date.now();
     if (statsCache && now - statsCache.at < 1000) return statsCache.promise;
     const promise = (async () => {
-      const showIds = await stats.findRecentShowIds(MAX_SHOWS_IN_GAUGES);
+      const showIds = await stats.findRecentShowIds(maxShows);
       const heldShowIds: string[] = [];
       const heldLabels: string[] = [];
       if (heldSource) {
-        const lists = await Promise.all(showIds.map((id) => heldSource!.listHeldSeats(id)));
+        const lists = await heldSource.listHeldSeatsForShows(showIds);
         showIds.forEach((id, i) => {
           for (const label of lists[i]!) {
             heldShowIds.push(id);
@@ -144,11 +142,16 @@ export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool) {
   return {
     /**
      * Supplies the source of held seats (Redis), which is created after the metrics and therefore wired in afterwards.
-     * @param source - Object that can list the held seat labels of a show.
+     * @param source - Object that can list the held seat labels of many shows at once.
      */
-    setHeldSeatsSource(source: { listHeldSeats(show: string): Promise<string[]> }) {
+    setHeldSeatsSource(source: { listHeldSeatsForShows(shows: string[]): Promise<string[][]> }) {
       heldSource = source;
     },
+    /**
+     * Seat counts for the newest shows (cached for one second), the same data the seat gauges report.
+     * Used by `GET /stats` for a readable one-line-per-show view.
+     */
+    getShowSeatStats: loadShowSeatStats,
     registry,
     httpRequests,
     httpDuration,

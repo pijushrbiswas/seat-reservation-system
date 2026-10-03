@@ -64,6 +64,21 @@ describe("cancel", () => {
     expect(after.seats).toEqual([{ seat: "A1", status: "confirmed" }]);
   });
 
+  it("marks a repeat cancel with Idempotent-Replayed and the first cancel without it", async () => {
+    const show = await t.createShow(["A1"]);
+    const tok = await t.token("hdr");
+    const r = await t.reserve(tok, show.id, ["A1"], "k");
+    const cancel = () =>
+      t.app.inject({ method: "POST", url: `/reservations/${r.body.reservation_id}/cancel`, headers: { authorization: `Bearer ${tok}` } });
+    const first = await cancel();
+    const repeat = await cancel();
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["idempotent-replayed"]).toBeUndefined();
+    expect(repeat.statusCode).toBe(200);
+    expect(repeat.headers["idempotent-replayed"]).toBe("true");
+    expect(repeat.json().status).toBe("cancelled");
+  });
+
   it("50 parallel cancels of one reservation release it exactly once", async () => {
     const show = await t.createShow(seatNames("C", 4));
     const tok = await t.token("dbl");

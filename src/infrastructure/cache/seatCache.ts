@@ -79,7 +79,7 @@ export class SeatCache {
   }
 
   /**
-   * Connection state for `/readyz`.
+   * Connection state for `/health`.
    * @returns `ok`, `down` (configured but not connected), or `disabled`.
    */
   connectionStatus(): "ok" | "down" | "disabled" {
@@ -229,6 +229,32 @@ export class SeatCache {
    * Runs a Redis operation, swallowing failure: a request never fails because the cache failed, and holds and markers expire on their own.
    * @param fn - The Redis call.
    */
+  /**
+   * Held seats of many shows in a single Redis round trip, in the same order as `shows`.
+   * Used by the metrics, which look at every show at once. Any failure reports nothing as held, like {@link SeatCache.listHeldSeats}.
+   * @param shows - Show ids.
+   */
+  async listHeldSeatsForShows(shows: string[]): Promise<string[][]> {
+    const none = () => shows.map(() => [] as string[]);
+    if (!this.client || shows.length === 0) return none();
+    try {
+      const pipeline = this.client.pipeline() as unknown as {
+        listLiveHolds(numKeys: number, ...args: string[]): unknown;
+        exec(): Promise<Array<[Error | null, unknown]> | null>;
+      };
+      for (const show of shows) pipeline.listLiveHolds(1, heldSeatsKey(show));
+      const results = await pipeline.exec();
+      if (!results) return none();
+      return shows.map((_, i) => {
+        const [err, value] = results[i] ?? [new Error("missing"), undefined];
+        return err || !Array.isArray(value) ? [] : (value as string[]);
+      });
+    } catch {
+      this.events.emit("cache.error");
+      return none();
+    }
+  }
+
   private async ignoringFailure(fn: () => Promise<unknown>): Promise<void> {
     if (!this.client) return;
     try {
