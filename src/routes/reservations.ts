@@ -1,11 +1,19 @@
 import type { FastifyInstance } from "fastify";
-import type { Auth } from "../auth.js";
-import { badRequest } from "../errors.js";
+import type { Auth } from "../security/auth.js";
+import { badRequest } from "../common/errors.js";
 import type { ReservationService } from "../services/reservations.js";
 
+/** A seat label is 1 to 32 characters of letters, digits, `_`, `.` or `-`. */
 const SEAT_LABEL_PATTERN = "^[A-Za-z0-9_.-]{1,32}$";
 
-export function reservationRoutes(app: FastifyInstance, auth: Auth, reservations: ReservationService): void {
+/**
+ * Registers `POST /shows/:id/reserve` (201 new, 200 idempotent replay, 409 clean decline) and `POST /reservations/:id/cancel` (owner only).
+ * The user id always comes from the verified token; one in the body is ignored. The idempotency key may be a header or a body field.
+ * @param app - Fastify instance.
+ * @param auth - User authentication.
+ * @param reservations - Reservation service.
+ */
+export function registerReservationRoutes(app: FastifyInstance, auth: Auth, reservations: ReservationService): void {
   app.post<{ Params: { id: string }; Body: { seats: string[]; idempotency_key?: string } }>(
     "/shows/:id/reserve",
     {
@@ -33,7 +41,7 @@ export function reservationRoutes(app: FastifyInstance, auth: Auth, reservations
         throw badRequest("an idempotency key is required (Idempotency-Key header or idempotency_key field)");
       }
       try {
-        const { replay, reservation } = await reservations.reserve({
+        const { replay, reservation } = await reservations.reserveSeats({
           userId,
           showId: req.params.id,
           seats: req.body.seats,
@@ -55,7 +63,7 @@ export function reservationRoutes(app: FastifyInstance, auth: Auth, reservations
 
   app.post<{ Params: { id: string } }>("/reservations/:id/cancel", async (req, reply) => {
     const userId = auth.requireUser(req);
-    const { changed, reservation } = await reservations.cancel(userId, req.params.id);
+    const { changed, reservation } = await reservations.cancelReservation(userId, req.params.id);
     req.outcome = changed ? "cancelled" : "already_cancelled";
     return reply.code(200).send(reservation);
   });

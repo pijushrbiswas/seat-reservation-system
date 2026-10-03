@@ -31,8 +31,8 @@ describe("health", () => {
   it("readiness fails closed when the database is unreachable", async () => {
     const broken = await makeApp();
     // Point the readiness pool at a dead port.
-    const { createHealthPool } = await import("../src/db.js");
-    const dead = createHealthPool({ ...broken.config, databaseUrl: "postgres://seats:seats@127.0.0.1:1/seats" });
+    const { createReadinessPool } = await import("../src/infrastructure/database/connection.js");
+    const dead = createReadinessPool({ ...broken.config, databaseUrl: "postgres://seats:seats@127.0.0.1:1/seats" });
     broken.ctx.healthPool = dead;
     const ready = await broken.app.inject({ method: "GET", url: "/readyz" });
     expect(ready.statusCode).toBe(503);

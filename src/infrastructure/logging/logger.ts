@@ -1,6 +1,10 @@
 import { Writable } from "node:stream";
 import pino, { type Logger, type LoggerOptions } from "pino";
 
+/**
+ * Fixed-size circular buffer holding the most recent log lines in memory, served by `GET /logs`.
+ * @param capacity - Maximum number of lines kept; the oldest is overwritten first.
+ */
 export class LogRing {
   private readonly lines: string[];
   private next = 0;
@@ -10,13 +14,21 @@ export class LogRing {
     this.lines = new Array<string>(capacity);
   }
 
-  push(line: string): void {
+  /**
+   * Adds a line, overwriting the oldest once the buffer is full.
+   * @param line - One JSON log line.
+   */
+  addLine(line: string): void {
     this.lines[this.next] = line;
     this.next = (this.next + 1) % this.capacity;
     if (this.size < this.capacity) this.size++;
   }
 
-  snapshot(): string[] {
+  /**
+   * Returns the buffered lines from oldest to newest.
+   * @returns A copy, safe to filter or slice.
+   */
+  getRecentLines(): string[] {
     const out: string[] = [];
     const start = (this.next - this.size + this.capacity) % this.capacity;
     for (let i = 0; i < this.size; i++) {
@@ -27,10 +39,16 @@ export class LogRing {
   }
 }
 
+/**
+ * Creates the structured JSON logger, writing each line to stdout (for the platform's log viewer) and into the ring buffer.
+ * @param level - Minimum level to emit.
+ * @param ring - Buffer that also receives every line.
+ * @param destination - Alternative to stdout, for tests.
+ */
 export function createLogger(level: string, ring: LogRing, destination?: NodeJS.WritableStream): Logger {
   const ringStream = new Writable({
     write(chunk, _enc, cb) {
-      ring.push(chunk.toString().trimEnd());
+      ring.addLine(chunk.toString().trimEnd());
       cb();
     },
   });

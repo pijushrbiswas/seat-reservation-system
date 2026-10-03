@@ -1,28 +1,24 @@
-import type pg from "pg";
-import type { Config } from "../config.js";
-import { withTx } from "../db.js";
-import { badRequest, notFound } from "../errors.js";
+import type { Config } from "../config/config.js";
+import type { SeatCache } from "../infrastructure/cache/seatCache.js";
+import { badRequest, notFound } from "../common/errors.js";
+import type { SeatStatus, ShowMeta, ShowRepository, StatusCountRow } from "../infrastructure/database/repositories/showRepository.js";
 
-export interface ShowMeta {
-  id: string;
-  name: string;
-  price_paise: number;
-  per_user_limit: number;
-  total_seats: number;
-  created_at: string;
-}
+export type { ShowMeta } from "../infrastructure/database/repositories/showRepository.js";
 
+/** One seat as shown to clients. `held` is never stored in Postgres; it comes from Redis. */
 export interface SeatView {
   seat: string;
-  status: "available" | "held" | "confirmed";
+  status: SeatStatus;
 }
 
+/** Seat totals by state; `available + held + confirmed` always equals the show's `total_seats`. */
 export interface ShowCounts {
   available: number;
   held: number;
   confirmed: number;
 }
 
+/** Validated input for creating a show. */
 export interface CreateShowInput {
   name: string;
   seats: string[];
@@ -30,75 +26,88 @@ export interface CreateShowInput {
   per_user_limit?: number;
 }
 
+/** Shape of a UUID, checked before querying so a malformed id is a 404 rather than a database error. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Tells whether a string looks like a UUID.
+ * @param s - Candidate id.
+ */
 export const isUuid = (s: string) => UUID_RE.test(s);
 
+/**
+ * Creates shows and reads their state. Postgres knows `available` and `confirmed`; Redis supplies which seats are currently held.
+ * @param shows - Database access for shows.
+ * @param config - Application settings.
+ * @param cache - Redis layer that reports held seats.
+ */
 export class ShowService {
-  // Show rows are immutable once created, so they can be cached for the life of the process.
+  /** Show rows never change after creation, so they are cached for the life of the process. */
   private readonly metaCache = new Map<string, ShowMeta>();
 
   constructor(
-    private readonly pool: pg.Pool,
+    private readonly shows: ShowRepository,
     private readonly config: Config,
+    private readonly cache: SeatCache,
   ) {}
 
-  async create(input: CreateShowInput) {
-    const unique = new Set(input.seats);
-    if (unique.size !== input.seats.length) throw badRequest("seats must be unique");
-    const limit = input.per_user_limit ?? this.config.defaultPerUserLimit;
-
-    const meta = await withTx(this.pool, async (db) => {
-      const { rows } = await db.query<ShowMeta>(
-        `INSERT INTO shows (name, price_paise, per_user_limit, total_seats)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, name, price_paise, per_user_limit, total_seats, created_at`,
-        [input.name, input.price_paise, limit, input.seats.length],
-      );
-      const show = rows[0]!;
-      await db.query(
-        `INSERT INTO seats (show_id, label, pos)
-         SELECT $1, t.label, t.ord FROM unnest($2::text[]) WITH ORDINALITY AS t(label, ord)`,
-        [show.id, input.seats],
-      );
-      return show;
+  /**
+   * Creates a show with every seat `available`.
+   * @param input - Name, seat labels (unique), price in paise and optional per-user limit.
+   * @returns The created show.
+   * @throws 400 if seat labels are not unique.
+   */
+  async createShow(input: CreateShowInput) {
+    if (new Set(input.seats).size !== input.seats.length) throw badRequest("seats must be unique");
+    const meta = await this.shows.insertShowWithSeats({
+      name: input.name,
+      seats: input.seats,
+      pricePaise: input.price_paise,
+      perUserLimit: input.per_user_limit ?? this.config.defaultPerUserLimit,
     });
     this.metaCache.set(meta.id, meta);
-    return this.view(meta, input.seats.map((seat) => ({ seat, status: "available" as const })));
+    return this.buildShowResponse(meta, input.seats.map((seat) => ({ seat, status: "available" as const })));
   }
 
-  async getMeta(id: string): Promise<ShowMeta> {
+  /**
+   * Loads a show's immutable facts, from memory when possible.
+   * @param id - Show id.
+   * @throws 404 if the id is malformed or unknown.
+   */
+  async getShowMeta(id: string): Promise<ShowMeta> {
     if (!isUuid(id)) throw notFound("show");
     const cached = this.metaCache.get(id);
     if (cached) return cached;
-    const { rows } = await this.pool.query<ShowMeta>(
-      `SELECT id, name, price_paise, per_user_limit, total_seats, created_at FROM shows WHERE id = $1`,
-      [id],
-    );
-    const meta = rows[0];
+    const meta = await this.shows.findShowById(id);
     if (!meta) throw notFound("show");
     this.metaCache.set(id, meta);
     return meta;
   }
 
-  // Each branch is a single statement, so counts and per-seat rows come from one snapshot.
-  async get(id: string, includeSeats: boolean) {
-    const meta = await this.getMeta(id);
+  /**
+   * Returns the show's state: counts and, optionally, every seat with its status.
+   * Held labels from Redis are passed into the single query that reads the seats, so each seat is classified exactly once from one
+   * snapshot and `available + held + confirmed == total_seats`. A confirmed seat is never reported as held.
+   * @param id - Show id.
+   * @param includeSeats - Whether to include the per-seat list or counts only.
+   * @throws 404 if the show does not exist.
+   */
+  async getShowState(id: string, includeSeats: boolean) {
+    const meta = await this.getShowMeta(id);
+    const held = await this.cache.listHeldSeats(id);
     if (!includeSeats) {
-      const { rows } = await this.pool.query<{ status: SeatView["status"]; n: number }>(
-        `SELECT status, count(*)::int AS n FROM seats WHERE show_id = $1 GROUP BY status`,
-        [id],
-      );
-      return this.view(meta, undefined, rows);
+      return this.buildShowResponse(meta, undefined, await this.shows.countSeatsByStatus(id, held));
     }
-    const { rows } = await this.pool.query<{ label: string; status: SeatView["status"] }>(
-      `SELECT label, status FROM seats WHERE show_id = $1 ORDER BY pos, label`,
-      [id],
-    );
-    const seats = rows.map((r) => ({ seat: r.label, status: r.status }));
-    return this.view(meta, seats);
+    const rows = await this.shows.listSeatsWithStatus(id, held);
+    return this.buildShowResponse(meta, rows.map((r) => ({ seat: r.label, status: r.status })));
   }
 
-  private view(meta: ShowMeta, seats?: SeatView[], grouped?: { status: SeatView["status"]; n: number }[]) {
+  /**
+   * Shapes the API response from either a per-seat list or grouped counts, including the `reconciled` flag.
+   * @param meta - The show.
+   * @param seats - Per-seat statuses, when requested.
+   * @param grouped - Pre-aggregated counts, when seats were not requested.
+   */
+  private buildShowResponse(meta: ShowMeta, seats?: SeatView[], grouped?: StatusCountRow[]) {
     const counts: ShowCounts = { available: 0, held: 0, confirmed: 0 };
     if (seats) for (const s of seats) counts[s.status]++;
     if (grouped) for (const g of grouped) counts[g.status] = g.n;

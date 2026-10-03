@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { Ctx } from "./context.js";
-import { AppError } from "./errors.js";
-import { isConnectionError } from "./db.js";
-import { healthRoutes } from "./routes/health.js";
-import { opsRoutes } from "./routes/ops.js";
-import { authRoutes } from "./routes/auth.js";
-import { showRoutes } from "./routes/shows.js";
-import { reservationRoutes } from "./routes/reservations.js";
-import { createAuth } from "./auth.js";
-import { ReservationService } from "./services/reservations.js";
-import { ShowService } from "./services/shows.js";
+import { AppError } from "../common/errors.js";
+import { isDatabaseUnreachable } from "../infrastructure/database/connection.js";
+import { registerHealthRoutes } from "../routes/health.js";
+import { registerOpsRoutes } from "../routes/ops.js";
+import { registerAuthRoutes } from "../routes/auth.js";
+import { registerShowRoutes } from "../routes/shows.js";
+import { registerReservationRoutes } from "../routes/reservations.js";
+import { createAuth } from "../security/auth.js";
+import { attachMetricsListeners } from "../infrastructure/metrics/metricsListener.js";
+import { ReservationRepository } from "../infrastructure/database/repositories/reservationRepository.js";
+import { ShowRepository } from "../infrastructure/database/repositories/showRepository.js";
+import { ReservationService } from "../services/reservations.js";
+import { ShowService } from "../services/shows.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -20,8 +23,14 @@ declare module "fastify" {
   }
 }
 
+/** A caller-supplied `x-request-id` is honoured only if it is short and made of safe characters. */
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
+/**
+ * Builds the Fastify app: request ids, metrics and logging hooks, one error handler for a uniform JSON error shape, and all routes.
+ * @param ctx - Shared dependencies (config, pools, metrics, logger, cache).
+ * @returns A ready-to-listen Fastify instance (tests use `inject` without listening).
+ */
 export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: ctx.log,
@@ -85,7 +94,7 @@ export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
         .code(err.statusCode)
         .send({ error: { code: "invalid_request", message: err.message, request_id: requestId } });
     }
-    if (isConnectionError(err)) {
+    if (isDatabaseUnreachable(err)) {
       req.log.error({ err: err.message }, "database unavailable");
       req.outcome = "service_unavailable";
       return reply
@@ -106,14 +115,16 @@ export async function buildApp(ctx: Ctx): Promise<FastifyInstance> {
       .send({ error: { code: "not_found", message: "route not found", request_id: req.id } });
   });
 
+  ctx.metrics.setHeldSeatsSource(ctx.cache);
   const auth = createAuth(ctx.config);
-  const shows = new ShowService(ctx.pool, ctx.config);
-  const reservations = new ReservationService(ctx.pool, shows, ctx.metrics);
+  attachMetricsListeners(ctx.events, ctx.metrics);
+  const shows = new ShowService(new ShowRepository(ctx.pool), ctx.config, ctx.cache);
+  const reservations = new ReservationService(new ReservationRepository(ctx.pool), shows, ctx.cache, ctx.events);
 
-  healthRoutes(app, ctx);
-  opsRoutes(app, ctx);
-  authRoutes(app, auth);
-  showRoutes(app, auth, shows);
-  reservationRoutes(app, auth, reservations);
+  registerHealthRoutes(app, ctx);
+  registerOpsRoutes(app, ctx);
+  registerAuthRoutes(app, auth);
+  registerShowRoutes(app, auth, shows);
+  registerReservationRoutes(app, auth, reservations);
   return app;
 }

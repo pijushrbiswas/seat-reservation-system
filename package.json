@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
+    "start": "node dist/bootstrap/server.js",
+    "dev": "tsx watch src/bootstrap/server.ts",
     "test": "vitest run",
     "burst": "tsx src/burst/burst.ts"
   },

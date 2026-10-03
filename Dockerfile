@@ -15,4 +15,4 @@ COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 USER node
 EXPOSE 8080
-CMD ["node", "--max-old-space-size=384", "dist/server.js"]
+CMD ["node", "--max-old-space-size=384", "dist/bootstrap/server.js"]

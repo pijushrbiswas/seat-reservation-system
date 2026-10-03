@@ -1,17 +1,29 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import type { Ctx } from "../context.js";
-import { unauthorized } from "../errors.js";
+import type { Ctx } from "../bootstrap/context.js";
+import { unauthorized } from "../common/errors.js";
 
+/** Numeric severity of each pino level, used to filter `GET /logs` by minimum level. */
 const LEVELS: Record<string, number> = { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60 };
 
-function tokenMatches(given: string, expected: string): boolean {
+/**
+ * Constant-time comparison of a presented bearer token with the expected one.
+ * @param given - Token from the request.
+ * @param expected - Configured token.
+ */
+function bearerTokenMatches(given: string, expected: string): boolean {
   const a = Buffer.from(given);
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function opsRoutes(app: FastifyInstance, ctx: Ctx): void {
+/**
+ * Registers `GET /metrics` (Prometheus text) and `GET /logs` (recent structured log lines as NDJSON, newest last).
+ * `/logs` is public unless `LOGS_TOKEN` is set, and can filter by `limit`, `level`, `request_id` and `path`.
+ * @param app - Fastify instance.
+ * @param ctx - Shared dependencies.
+ */
+export function registerOpsRoutes(app: FastifyInstance, ctx: Ctx): void {
   app.get("/metrics", async (_req, reply) => {
     reply.header("content-type", ctx.metrics.registry.contentType);
     return ctx.metrics.registry.metrics();
@@ -38,11 +50,11 @@ export function opsRoutes(app: FastifyInstance, ctx: Ctx): void {
       if (ctx.config.logsToken) {
         const header = req.headers.authorization ?? "";
         const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-        if (!tokenMatches(token, ctx.config.logsToken)) throw unauthorized();
+        if (!bearerTokenMatches(token, ctx.config.logsToken)) throw unauthorized();
       }
       const { limit = 200, level, request_id, path } = req.query;
       const min = level ? LEVELS[level] ?? 0 : 0;
-      let lines = ctx.ring.snapshot();
+      let lines = ctx.ring.getRecentLines();
       if (request_id || path || min > 0) {
         lines = lines.filter((line) => {
           if (request_id && !line.includes(request_id)) return false;

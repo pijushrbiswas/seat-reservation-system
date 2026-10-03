@@ -1,11 +1,15 @@
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
-import { loadConfig, type Config } from "../src/config.js";
-import type { Ctx } from "../src/context.js";
-import { createHealthPool, createPool, migrate } from "../src/db.js";
-import { LogRing, createLogger } from "../src/logger.js";
-import { createMetrics } from "../src/metrics.js";
+import { buildApp } from "../src/bootstrap/app.js";
+import { loadConfig, type Config } from "../src/config/config.js";
+import type { Ctx } from "../src/bootstrap/context.js";
+import { createReadinessPool, createMainPool, applyMigrations } from "../src/infrastructure/database/connection.js";
+import { LogRing, createLogger } from "../src/infrastructure/logging/logger.js";
+import { createMetrics } from "../src/infrastructure/metrics/metrics.js";
+import { SeatCache } from "../src/infrastructure/cache/seatCache.js";
+import { EventBus } from "../src/infrastructure/events/eventBus.js";
+import { ShowStatsRepository } from "../src/infrastructure/database/repositories/showStatsRepository.js";
 
+/** Admin token the test app is configured with. */
 export const ADMIN_TOKEN = "test-admin-token";
 
 // Idempotency keys are scoped per user and the test DB persists across runs,
@@ -40,25 +44,38 @@ export interface ShowBody {
   [k: string]: any;
 }
 
+/**
+ * Boots the app against the real Postgres and Redis test services.
+ * @param env - Config overrides, for example `SEAT_HOLD_SECONDS` or `REDIS_URL`.
+ * @returns A test harness with helpers to mint tokens, create shows, reserve and cancel.
+ */
 export async function makeApp(env: Record<string, string> = {}): Promise<TestApp> {
   const config = loadConfig({
     DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgres://seats:seats@localhost:5433/seats",
+    REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6380",
+    REDIS_ENABLED: "true",
     JWT_SECRET: "test-jwt-secret",
     ADMIN_TOKEN,
     LOG_LEVEL: "silent",
     PG_POOL_MAX: "20",
     ...env,
   });
-  const pool = createPool(config);
-  const healthPool = createHealthPool(config);
-  await migrate(pool, config.migrationsDir);
+  const pool = createMainPool(config);
+  const healthPool = createReadinessPool(config);
+  await applyMigrations(pool, config.migrationsDir);
   const ring = new LogRing(1000);
   const log = createLogger(config.logLevel, ring);
+  const events = new EventBus();
+  const metrics = createMetrics(new ShowStatsRepository(pool), pool);
+  const cache = new SeatCache(config, events);
+  await cache.waitUntilReady(1500);
   const ctx: Ctx = {
     config,
     pool,
     healthPool,
-    metrics: createMetrics(pool),
+    metrics,
+    cache,
+    events,
     ring,
     log,
   };
@@ -93,6 +110,7 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
       await app.close();
       await pool.end();
       await healthPool.end();
+      await cache.close();
     },
     async token(userId) {
       const r = await call("POST", "/auth/token", { body: { user_id: userId } });
@@ -118,8 +136,17 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
   return t;
 }
 
+/**
+ * Builds labels like `A1` to `An`.
+ * @param prefix - Label prefix.
+ * @param n - Count.
+ */
 export const seatNames = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
 
+/**
+ * Throws unless `available + held + confirmed == total_seats`.
+ * @param s - A show as returned by the API.
+ */
 export function assertReconciled(s: ShowBody): void {
   if (s.available + s.held + s.confirmed !== s.total_seats) {
     throw new Error(`invariant violated: ${JSON.stringify({ a: s.available, h: s.held, c: s.confirmed, t: s.total_seats })}`);

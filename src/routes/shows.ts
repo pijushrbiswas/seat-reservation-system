@@ -1,10 +1,17 @@
 import type { FastifyInstance } from "fastify";
-import type { Auth } from "../auth.js";
+import type { Auth } from "../security/auth.js";
 import type { ShowService } from "../services/shows.js";
 
+/** A seat label is 1 to 32 characters of letters, digits, `_`, `.` or `-`. */
 const SEAT_LABEL_PATTERN = "^[A-Za-z0-9_.-]{1,32}$";
 
-export function showRoutes(app: FastifyInstance, auth: Auth, shows: ShowService): void {
+/**
+ * Registers `POST /shows` (admin only; creates a show with every seat available) and `GET /shows/:id` (per-seat status and counts).
+ * @param app - Fastify instance.
+ * @param auth - Admin check.
+ * @param shows - Show service.
+ */
+export function registerShowRoutes(app: FastifyInstance, auth: Auth, shows: ShowService): void {
   app.post<{ Body: { name: string; seats: string[]; price_paise: number; per_user_limit?: number } }>(
     "/shows",
     {
@@ -28,7 +35,7 @@ export function showRoutes(app: FastifyInstance, auth: Auth, shows: ShowService)
     },
     async (req, reply) => {
       auth.requireAdmin(req);
-      const show = await shows.create(req.body);
+      const show = await shows.createShow(req.body);
       return reply.code(201).send(show);
     },
   );
@@ -40,6 +47,6 @@ export function showRoutes(app: FastifyInstance, auth: Auth, shows: ShowService)
         querystring: { type: "object", properties: { seats: { type: "boolean", default: true } } },
       },
     },
-    async (req) => shows.get(req.params.id, req.query.seats ?? true),
+    async (req) => shows.getShowState(req.params.id, req.query.seats ?? true),
   );
 }

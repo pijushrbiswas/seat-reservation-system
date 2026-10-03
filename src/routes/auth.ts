@@ -1,8 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import type { Auth } from "../auth.js";
-import { USER_ID_PATTERN } from "../auth.js";
+import type { Auth } from "../security/auth.js";
+import { USER_ID_PATTERN } from "../security/auth.js";
 
-export function authRoutes(app: FastifyInstance, auth: Auth): void {
+/**
+ * Registers `POST /auth/token`, a demo login that mints a user token for any valid user id.
+ * @param app - Fastify instance.
+ * @param auth - Token issuer.
+ */
+export function registerAuthRoutes(app: FastifyInstance, auth: Auth): void {
   // Demo login: anyone can mint a token for a user id. Replace with a real IdP in production.
   app.post<{ Body: { user_id: string } }>(
     "/auth/token",
