@@ -163,7 +163,7 @@ describe("redis is an accelerator, never the authority", () => {
       expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
       assertReconciled(await down.show(show.id));
       expect(await counter(down, "cacheErrors")).toBeGreaterThan(0);
-      const ready = await down.app.inject({ method: "GET", url: "/readyz" });
+      const ready = await down.app.inject({ method: "GET", url: "/health" });
       expect(ready.statusCode).toBe(200);
       expect(ready.json().checks.redis).toBe("down");
     } finally {

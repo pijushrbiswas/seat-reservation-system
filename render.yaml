@@ -5,7 +5,7 @@ services:
     name: seat-reservation
     runtime: docker
     plan: free
-    healthCheckPath: /healthz
+    healthCheckPath: /health?probe=live
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -16,6 +16,10 @@ services:
           type: keyvalue
           name: seat-reservation-cache
           property: connectionString
+      - key: NEW_RELIC_LICENSE_KEY
+        sync: false
+      - key: NEW_RELIC_REGION
+        value: us
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_TOKEN

@@ -115,8 +115,8 @@ A "partition" means one part of the system can't reach another.
 
 | What breaks | What happens | Why |
 |---|---|---|
-| **Postgres unreachable** | Reserve and show requests return **503**. `/readyz` fails, so the load balancer stops sending traffic. `/healthz` stays up so the platform doesn't restart-loop the app. | Better to refuse than to guess. We never sell a seat from a cache. |
-| **Redis unreachable or flushed** | The service **keeps working**, just slower on hot seats. Calls time out fast (300 ms, no queue), so requests go straight to Postgres. `/readyz` stays healthy and reports `redis: down`. | Redis can only decline, never sell, so losing it can't cause a double-sale. Tested with 300 parallel requests on one seat while Redis was down: 1 winner, 299 clean 409s, zero 5xx. |
+| **Postgres unreachable** | Reserve and show requests return **503**. `/health` (the default readiness probe) fails, so the load balancer stops sending traffic. `/health?probe=live` stays up so the platform doesn't restart-loop the app. | Better to refuse than to guess. We never sell a seat from a cache. |
+| **Redis unreachable or flushed** | The service **keeps working**, just slower on hot seats. Calls time out fast (300 ms, no queue), so requests go straight to Postgres. `/health` stays healthy and reports `redis: down`. | Redis can only decline, never sell, so losing it can't cause a double-sale. Tested with 300 parallel requests on one seat while Redis was down: 1 winner, 299 clean 409s, zero 5xx. |
 
 The worst thing Redis can do when it is wrong is **wrongly decline** someone for a short time (a stale "taken" marker lives at most 30 seconds). It can never cause a wrong sale.
 
@@ -127,20 +127,20 @@ The cost of this choice: if Postgres is down, the on-sale is down. With a replic
 ## 5. Observability (what would wake me at 2am)
 
 **What the service exposes**
-- `GET /healthz` is liveness. `GET /readyz` checks Postgres on its own small connection pool, so a busy burst can't make it look dead. It fails closed with 503.
+- `GET /health` is the one health endpoint. By default it is the readiness probe: it checks Postgres on its own small connection pool, so a busy burst can't make it look dead, and it fails closed with 503. `GET /health?probe=live` is the liveness probe (the process is up, no dependency checked).
 - `GET /metrics` (Prometheus format):
   - `reservations_confirmed_total`
   - `reservations_declined_total{reason}` with reasons `seat_taken`, `per_user_limit`, `idempotent_replay`, `idempotency_key_conflict`, `unknown_seat`
   - `reservations_cancelled_total`
-  - `seats_available`, `seats_held`, `seats_confirmed`, `seats_total` and `seats_reconciliation_drift` per show (newest 20)
+  - `seats_available`, `seats_held`, `seats_confirmed`, `seats_total` and `seats_reconciliation_drift` per show, for every show (`METRICS_MAX_SHOWS` can cap it to the newest N)
   - HTTP request counts, latency and in-flight requests, Postgres pool state, and Redis counters (`seat_cache_declines_total`, `seat_cache_errors_total`)
-- **Logs:** structured JSON, one line per request. Each has a `request_id`, which also comes back in the `x-request-id` header and in error bodies. `GET /logs?request_id=...` finds a buyer's failed request.
+- **Logs:** structured JSON, one line per request. Each line has two ids: a `request_id` (this one HTTP call) and a `correlation_id` (the whole flow, taken from the caller's `x-correlation-id` so it stays the same across services, or generated if absent). Both come back in response headers and in error bodies. `GET /logs?request_id=...` finds a buyer's failed request, and `GET /logs?correlation_id=...` finds every call of a flow. When `NEW_RELIC_LICENSE_KEY` is set, every log line and every metric is also shipped to New Relic (logs: batched, compressed, retried, bounded queue; metrics: counter increases every 15 seconds, nothing lost on a failed send; both flushed on shutdown), so they can be searched, charted and alerted on there and survive restarts. A New Relic outage never affects requests.
 
 **How the numbers stay honest:** the seat gauges are not kept in memory. They are read from Postgres (plus Redis for held seats) when scraped, so they always match the API. The burst tool compares the counters with what it actually observed, and they match exactly.
 
 **Page me (wake me up)**
 - `seats_reconciliation_drift != 0`: the core invariant is broken. Stop sales.
-- `/readyz` failing for more than 1 to 2 minutes.
+- `/health` failing for more than 1 to 2 minutes.
 - 5xx responses above about 1% of traffic.
 - p99 latency of reserve above a few seconds for 5 minutes.
 
@@ -212,7 +212,7 @@ I did not take correctness on trust. I ran concurrency tests (hot-seat storms, p
 - **Deploy and run the burst against the public URL.** Keep the output and a screen recording of the live logs with the submission.
 - **Get load numbers on a realistic instance.** Tune the database pool size (`PG_POOL_MAX`), and add **PgBouncer** (a connection pooler) if I run several app instances, because each instance's connections add up against Postgres's limit. Migrations would bypass it because they use a session-level lock.
 - **Put alerts in the repo.** Check in a Prometheus config and alert rules for the "page me" list above, so they can be loaded and tested.
-- **Per-show metrics beyond the newest 20 shows**, plus one cheap global check that the invariant holds across all shows.
+- **Per-show metrics at large scale.** Every show is reported now, which is fine for hundreds or a few thousand shows; past that, report only active shows (or roll old ones up) to keep the number of metric series, and the cost of the stats query, in check.
 - **Add a payment step.** Split reserve into "hold" and a separate "confirm" call, so the 5-minute hold does real work for the buyer, with an "extend hold" option for slow payments.
 - **Protect the front door for extreme on-sales** with a rate limiter or a virtual waiting room, and add live seat-map updates (server-sent events).
 - **Harden Redis** by running it replicated or as a cluster. The keys already use `{showId}` hash tags for this.

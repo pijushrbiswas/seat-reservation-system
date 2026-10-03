@@ -1,0 +1,497 @@
+{
+  "name": "Seat reservations",
+  "description": "Reservations, seats per show, the reconciliation invariant, service health and logs. Import from observability/newrelic-dashboard.json after replacing accountId 0 with your account id.",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Reservations",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Reservations confirmed",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(reservations_confirmed_total) AS 'confirmed' FROM Metric SINCE 1 hour ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Declined by reason",
+          "layout": {
+            "column": 4,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(reservations_declined_total) FROM Metric FACET reason SINCE 1 hour ago LIMIT MAX"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            }
+          }
+        },
+        {
+          "title": "Seat invariant drift (must be 0)",
+          "layout": {
+            "column": 8,
+            "row": 1,
+            "width": 2,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT max(seats_reconciliation_drift) AS 'drift' FROM Metric SINCE 1 hour ago"
+              }
+            ],
+            "thresholds": [
+              {
+                "alertSeverity": "CRITICAL",
+                "value": 1
+              }
+            ]
+          }
+        },
+        {
+          "title": "Declined by Redis",
+          "layout": {
+            "column": 10,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(seat_cache_declines_total) AS 'declined by Redis' FROM Metric SINCE 1 hour ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Confirmed vs declined over time",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(reservations_confirmed_total) AS 'confirmed', sum(reservations_declined_total) AS 'declined' FROM Metric SINCE 1 hour ago TIMESERIES"
+              }
+            ],
+            "legend": {
+              "enabled": true
+            },
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Declines by reason over time",
+          "layout": {
+            "column": 7,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.area"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(reservations_declined_total) FROM Metric FACET reason SINCE 1 hour ago TIMESERIES LIMIT MAX"
+              }
+            ],
+            "legend": {
+              "enabled": true
+            },
+            "facet": {
+              "showOtherSeries": false
+            }
+          }
+        },
+        {
+          "title": "Seats per show",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 12,
+            "height": 5
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT latest(seats_total) AS 'total', latest(seats_available) AS 'available', latest(seats_held) AS 'held', latest(seats_confirmed) AS 'confirmed', max(seats_reconciliation_drift) AS 'drift' FROM Metric FACET show_id SINCE 10 minutes ago LIMIT 100"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Service health",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Requests by status",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.area"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(http_requests_total) FROM Metric FACET status SINCE 1 hour ago TIMESERIES LIMIT MAX"
+              }
+            ],
+            "legend": {
+              "enabled": true
+            },
+            "facet": {
+              "showOtherSeries": false
+            }
+          }
+        },
+        {
+          "title": "Average reserve latency (seconds)",
+          "layout": {
+            "column": 7,
+            "row": 1,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(http_request_duration_seconds_sum) / sum(http_request_duration_seconds_count) AS 'avg seconds' FROM Metric WHERE route = '/shows/:id/reserve' SINCE 1 hour ago TIMESERIES"
+              }
+            ],
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Redis errors (fell back to Postgres)",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(seat_cache_errors_total) AS 'cache errors' FROM Metric SINCE 1 hour ago TIMESERIES"
+              }
+            ],
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Database pool: waiting connections",
+          "layout": {
+            "column": 7,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT max(pg_pool_connections) AS 'waiting' FROM Metric WHERE state = 'waiting' SINCE 1 hour ago TIMESERIES"
+              }
+            ],
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Server errors (5xx)",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT sum(http_requests_total) AS '5xx' FROM Metric WHERE status LIKE '5%' SINCE 1 hour ago"
+              }
+            ],
+            "thresholds": [
+              {
+                "alertSeverity": "CRITICAL",
+                "value": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Logs",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Log messages received",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT count(*) AS 'Logs Count' FROM Log WHERE service = 'seat-reservation' SINCE 1 hour ago COMPARE WITH 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Log level",
+          "layout": {
+            "column": 4,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.bar"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT count(*) FROM Log WHERE service = 'seat-reservation' FACET level SINCE 1 hour ago LIMIT MAX"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": true
+            }
+          }
+        },
+        {
+          "title": "Request outcomes",
+          "layout": {
+            "column": 7,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT count(*) FROM Log WHERE service = 'seat-reservation' AND outcome IS NOT NULL FACET outcome SINCE 1 hour ago LIMIT MAX"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            }
+          }
+        },
+        {
+          "title": "HTTP status over time",
+          "layout": {
+            "column": 10,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.area"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT count(*) FROM Log WHERE service = 'seat-reservation' AND status IS NOT NULL FACET status SINCE 1 hour ago TIMESERIES LIMIT MAX"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            }
+          }
+        },
+        {
+          "title": "Slowest routes (max duration ms)",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT max(duration_ms) AS 'max ms', average(duration_ms) AS 'avg ms', count(*) AS 'requests' FROM Log WHERE service = 'seat-reservation' AND duration_ms IS NOT NULL FACET route SINCE 1 hour ago LIMIT 20"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            }
+          }
+        },
+        {
+          "title": "Errors (4xx and 5xx by route)",
+          "layout": {
+            "column": 7,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT count(*) FROM Log WHERE service = 'seat-reservation' AND status >= 400 FACET route, status, outcome SINCE 1 hour ago LIMIT 50"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            }
+          }
+        },
+        {
+          "title": "Recent requests",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 12,
+            "height": 6
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountId": 0,
+                "query": "SELECT level, service, method, path, status, outcome, duration_ms, request_id, correlation_id, user_id, message FROM Log WHERE service = 'seat-reservation' AND request_id IS NOT NULL SINCE 1 hour ago LIMIT 100"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variables": []
+}

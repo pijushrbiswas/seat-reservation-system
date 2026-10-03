@@ -75,9 +75,9 @@ describe("GET /shows/:id", () => {
 
 describe("request ids", () => {
   it("echoes a caller-supplied id and generates one otherwise", async () => {
-    const a = await t.app.inject({ url: "/healthz", headers: { "x-request-id": "abc-123" } });
+    const a = await t.app.inject({ url: "/health?probe=live", headers: { "x-request-id": "abc-123" } });
     expect(a.headers["x-request-id"]).toBe("abc-123");
-    const b = await t.app.inject({ url: "/healthz" });
+    const b = await t.app.inject({ url: "/health?probe=live" });
     expect(b.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

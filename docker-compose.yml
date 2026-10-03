@@ -39,10 +39,13 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: dev-jwt-secret-change-me
       ADMIN_TOKEN: dev-admin-token
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_REGION: ${NEW_RELIC_REGION:-us}
+      NEW_RELIC_METRICS_ENABLED: ${NEW_RELIC_METRICS_ENABLED:-true}
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 20
