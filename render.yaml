@@ -26,6 +26,33 @@ services:
         value: info
       - key: SHOW_STATE_CACHE_MS
         value: "250"
+      # Logs are pushed to the monitoring service below. Set LOKI_URL after the first deploy, to
+      # https://<seat-monitoring host>/loki/api/v1/push ; until then the app simply does not push.
+      - key: LOKI_URL
+        sync: false
+      - key: LOKI_TOKEN
+        fromService:
+          type: web
+          name: seat-monitoring
+          envVarKey: LOKI_TOKEN
+
+  # Grafana + Prometheus + Loki in one container (see observability/render). Grafana is the public face; log pushes need the token.
+  # Free web services sleep when idle and have no disk, so history is short and charts have gaps while it is asleep.
+  - type: web
+    name: seat-monitoring
+    runtime: docker
+    plan: free
+    dockerfilePath: ./observability/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: GF_SECURITY_ADMIN_PASSWORD
+        generateValue: true
+      - key: LOKI_TOKEN
+        generateValue: true
+      # Host of the app to scrape, without https://, for example seat-reservation-7wrl.onrender.com
+      - key: APP_HOST
+        sync: false
 
   # Redis-compatible store for seat leases. Losing it is safe: Postgres still decides every reservation.
   - type: keyvalue

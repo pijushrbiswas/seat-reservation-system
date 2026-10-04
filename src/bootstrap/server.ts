@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import type { Ctx } from "./context.js";
 import { createReadinessPool, createMainPool, applyMigrations, waitUntilDatabaseReady } from "../infrastructure/database/connection.js";
 import { LogRing, createLogger } from "../infrastructure/logging/logger.js";
+import { LokiLogShipper } from "../infrastructure/logging/lokiShipper.js";
 import { createMetrics } from "../infrastructure/metrics/metrics.js";
 import { SeatCache } from "../infrastructure/cache/seatCache.js";
 import { EventBus } from "../infrastructure/events/eventBus.js";
@@ -14,7 +15,9 @@ import { ShowStatsRepository } from "../infrastructure/database/repositories/sho
  */
 const config = loadConfig();
 const ring = new LogRing(config.logBufferLines);
-const log = createLogger(config.logLevel, ring);
+const loki = config.lokiUrl ? new LokiLogShipper({ url: config.lokiUrl, token: config.lokiToken, serviceName: "seat-reservation" }) : undefined;
+const log = createLogger(config.logLevel, ring, undefined, loki ? [loki.stream] : []);
+if (loki) log.info("pushing logs to Loki");
 const pool = createMainPool(config);
 const healthPool = createReadinessPool(config);
 
@@ -52,6 +55,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     log.info({ signal }, "shutting down");
     await app.close();
     await Promise.allSettled([pool.end(), healthPool.end(), cache.close()]);
+    await loki?.close();
     process.exit(0);
   });
 }
