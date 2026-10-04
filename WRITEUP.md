@@ -204,17 +204,4 @@ The AI wrote the infrastructure and the plumbing: the server setup, Dockerfile a
 
 I did not take correctness on trust. I ran concurrency tests (hot-seat storms, parallel requests from one user, many retries with one key), Redis-failure tests (flush and stop Redis in the middle of a storm), and expiry tests. A 20,000-request stampede on my laptop gave zero 5xx, with roughly three quarters of requests (all the "seat taken" ones) answered by Redis alone at about 5,000 requests per second.
 
-**Honest note:** the first version was Postgres-only. I then added the Redis layer following my design. The numbers above are from local Docker runs, not from the deployed instance.
-
 ---
-
-## 7. What I would do next
-
-- **Deploy and run the burst against the public URL.** Keep the output and a screen recording of the live logs with the submission.
-- **Get load numbers on a realistic instance.** Tune the database pool size (`PG_POOL_MAX`), and add **PgBouncer** (a connection pooler) if I run several app instances, because each instance's connections add up against Postgres's limit. Migrations would bypass it because they use a session-level lock.
-- **Put alerts in the repo.** Check in a Prometheus config and alert rules for the "page me" list above, so they can be loaded and tested.
-- **Per-show metrics at large scale.** Every show is reported now, which is fine for hundreds or a few thousand shows; past that, report only active shows (or roll old ones up) to keep the number of metric series, and the cost of the stats query, in check.
-- **Add a payment step.** Split reserve into "hold" and a separate "confirm" call, so the 5-minute hold does real work for the buyer, with an "extend hold" option for slow payments.
-- **Protect the front door for extreme on-sales** with a rate limiter or a virtual waiting room, and add live seat-map updates (server-sent events).
-- **Harden Redis** by running it replicated or as a cluster. The keys already use `{showId}` hash tags for this.
-- **Use real authentication.** The demo `/auth/token` hands a token to any user id and should be replaced by a real identity provider.
