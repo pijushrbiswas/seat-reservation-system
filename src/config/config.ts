@@ -49,10 +49,6 @@ export interface Config {
   logLevel: string;
   /** How many recent log lines are kept in memory for `GET /logs`; the oldest is dropped first. */
   logBufferLines: number;
-  /** Loki push URL; when set, every log line is also pushed there (used on Render, where no log agent can read stdout). */
-  lokiUrl: string | undefined;
-  /** Bearer token sent to Loki with each push. */
-  lokiToken: string | undefined;
   /** How many shows get per-show seat gauges (newest first); 0 means every show. */
   metricsMaxShows: number;
   /** How long per-show seat gauges and `GET /stats` reuse one database read, in seconds. */
@@ -95,10 +91,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logsToken: env.LOGS_TOKEN || undefined,
     logLevel: env.LOG_LEVEL ?? "info",
     logBufferLines: int(env, "LOG_BUFFER_LINES", 50_000),
-    lokiUrl: env.LOKI_URL || undefined,
-    lokiToken: env.LOKI_TOKEN || undefined,
     metricsMaxShows: int(env, "METRICS_MAX_SHOWS", 0),
-    metricsCacheSeconds: int(env, "METRICS_CACHE_SECONDS", 10),
+    metricsCacheSeconds: int(env, "METRICS_CACHE_SECONDS", 1),
     showStateCacheMs: int(env, "SHOW_STATE_CACHE_MS", 0),
     pgPoolMax: int(env, "PG_POOL_MAX", 20),
     pgSsl: bool(env, "PG_SSL", false),

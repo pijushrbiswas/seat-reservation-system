@@ -57,7 +57,6 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
     JWT_SECRET: "test-jwt-secret",
     ADMIN_TOKEN,
     LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? "silent",
-    METRICS_CACHE_SECONDS: "1",
     PG_POOL_MAX: "20",
     ...env,
   });
