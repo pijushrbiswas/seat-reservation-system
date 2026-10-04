@@ -36,13 +36,14 @@ The winner runs **one database transaction**. Either all the steps succeed or no
 
 1. Claim the idempotency key (see section 2).
 2. Check and take the user's seat quota (the per-user limit).
-3. **Lock the seat rows:** `SELECT ... FROM seats WHERE label IN (...) ORDER BY label COLLATE "C" FOR UPDATE`.
-4. If every seat is `available`, insert the reservation and run `UPDATE seats SET status='confirmed' ... WHERE status='available'`. Then check that exactly the expected number of rows changed.
+3. **Win the seats, in one statement.** It locks the available requested seats (`SELECT label FROM seats WHERE label = ANY(...) AND status='available' ORDER BY label COLLATE "C" FOR UPDATE`). Only if it locked every requested seat does it set them to `confirmed`, insert the reservation and attach it to the idempotency key. If it locked fewer, it changes nothing and a follow-up read names the unknown or taken seats, and the transaction rolls back.
+
+A reserve is therefore `BEGIN`, three statements and `COMMIT`. Fewer round trips means less parse and plan work in Postgres, and the row locks are held for a shorter time. The hot statements are also named, so each connection prepares them once and reuses the plan.
 
 ### Why there is no race
 
 - **`FOR UPDATE` locks the row.** Anyone else who wants the same seat waits until the first transaction ends. Then they read the new value (`confirmed`) and are declined. There is no gap between "check" and "take", because the check itself takes the lock.
-- **The final `UPDATE` has its own guard** (`WHERE status='available'`) and we verify the row count. Even if the lock were skipped by mistake, the update could not overwrite a sold seat.
+- **The update is all-or-nothing inside the statement.** It only runs when the number of locked seats equals the number requested, and the reservation is only inserted when the number of confirmed seats equals the number requested. Even if the lock were skipped by mistake, the lock query only selects `status='available'` seats, so a sold seat could not be overwritten.
 - **The schema backs it up.** A seat is either `available` with no owner or `confirmed` with an owner, and a database constraint enforces that. `(show_id, label)` is the primary key.
 - **Redis never sells a seat.** It can only say "no" or "you may try". If Redis is flushed or down, requests simply reach Postgres, which still decides correctly. I tested this by flushing Redis in the middle of a storm: still exactly one winner per seat.
 
@@ -56,15 +57,15 @@ The winner runs **one database transaction**. Either all the steps succeed or no
 
 ### The per-user limit
 
-Each `(show, user)` has one small counter row (`user_show_holdings`). Two statements:
+Each `(show, user)` has one small counter row (`user_show_holdings`), checked and taken in one statement:
 
 ```sql
-INSERT ... (show_id, user_id, 0) ON CONFLICT DO NOTHING;     -- make sure the row exists
-UPDATE ... SET held_count = held_count + n
- WHERE ... AND held_count + n <= limit;                     -- check and take in one step
+INSERT ... (show_id, user_id, n) SELECT ... WHERE n <= limit
+ON CONFLICT (show_id, user_id) DO UPDATE SET held_count = held_count + n
+ WHERE held_count + n <= limit;                             -- create or bump, and check, in one step
 ```
 
-If the update changes 0 rows, the user is over the limit and gets a clean 409. The `UPDATE` locks the row, so one user's parallel requests go one after another and each sees the previous total. Ten parallel requests with a limit of 4 end with exactly 4.
+If the statement changes 0 rows, the user is over the limit and gets a clean 409. The conflict path locks the row, so one user's parallel requests go one after another and each sees the previous total. Ten parallel requests with a limit of 4 end with exactly 4.
 
 **Why not just count the user's reservations?** Counting and then inserting is a race. Two requests both count 3, both pass a limit of 4, and the user ends up with 5. I also tried `SELECT ... FOR UPDATE` on the reservations table, and my concurrency test failed, because the row being added doesn't exist yet, so there is nothing to lock. A counter row always exists, so it can be locked.
 
@@ -134,7 +135,7 @@ The cost of this choice: if Postgres is down, the on-sale is down. With a replic
   - `reservations_cancelled_total`
   - `seats_available`, `seats_held`, `seats_confirmed`, `seats_total` and `seats_reconciliation_drift` per show, for every show (`METRICS_MAX_SHOWS` can cap it to the newest N)
   - HTTP request counts, latency and in-flight requests, Postgres pool state, and Redis counters (`seat_cache_declines_total`, `seat_cache_errors_total`)
-- **Logs:** structured JSON, one line per request. Each line has two ids: a `request_id` (this one HTTP call) and a `correlation_id` (the whole flow, taken from the caller's `x-correlation-id` so it stays the same across services, or generated if absent). Both come back in response headers and in error bodies. `GET /logs?request_id=...` finds a buyer's failed request, and `GET /logs?correlation_id=...` finds every call of a flow. When `NEW_RELIC_LICENSE_KEY` is set, every log line and every metric is also shipped to New Relic (logs: batched, compressed, retried, bounded queue; metrics: counter increases every 15 seconds, nothing lost on a failed send; both flushed on shutdown), so they can be searched, charted and alerted on there and survive restarts. A New Relic outage never affects requests.
+- **Logs:** structured JSON, one line per request. Each line has two ids: a `request_id` (this one HTTP call) and a `correlation_id` (the whole flow, taken from the caller's `x-correlation-id` so it stays the same across services, or generated if absent). Both come back in response headers and in error bodies. `GET /logs?request_id=...` finds a buyer's failed request, and `GET /logs?correlation_id=...` finds every call of a flow. The container's stdout is collected by Grafana Alloy and stored in Loki, so logs can be searched and charted in Grafana and survive restarts. Prometheus scrapes `/metrics` every 15 seconds. Both run in Docker Compose next to the app and are self-hosted; the app itself only writes to stdout and serves `/metrics`, so an observability outage never affects requests.
 
 **How the numbers stay honest:** the seat gauges are not kept in memory. They are read from Postgres (plus Redis for held seats) when scraped, so they always match the API. The burst tool compares the counters with what it actually observed, and they match exactly.
 
@@ -173,7 +174,7 @@ I listed the three things the graders would hit: many people on one hot seat, on
 - I set the hold to 5 minutes.
 
 **4. I designed the database locking.**
-- Row locks (`SELECT ... FOR UPDATE`) are the real decision, taken in one fixed order, together with a guarded `UPDATE ... WHERE status='available'` and a row-count check.
+- Row locks (`SELECT ... FOR UPDATE`) are the real decision, taken in one fixed order, inside a single statement that confirms the seats only if every requested seat was locked.
 - I worked out that the lock order must be the same in the app and in SQL, which is why seats are sorted with `COLLATE "C"`, and why the order across tables is always idempotency row, then quota row, then seat rows.
 - I chose all-or-nothing for multi-seat requests and made sure it also holds in the Redis script.
 

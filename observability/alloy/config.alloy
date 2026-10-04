@@ -1,0 +1,44 @@
+logging {
+  level = "warn"
+}
+
+// Reads the stdout of every container labelled logging=loki (the app) and pushes it to Loki.
+// Only `service` and `level` become Loki labels; every other field (route, status, request_id, ...) stays in the JSON line and is read with `| json`.
+discovery.docker "app" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["logging=loki"]
+  }
+}
+
+loki.source.docker "app" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.app.targets
+  forward_to = [loki.process.app.receiver]
+}
+
+loki.process "app" {
+  stage.json {
+    expressions = {
+      level   = "level",
+      service = "service",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level   = "",
+      service = "",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

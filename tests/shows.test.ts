@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ADMIN_TOKEN, makeApp, seatNames, type TestApp } from "./helpers.js";
 
 let t: TestApp;
@@ -79,5 +79,27 @@ describe("request ids", () => {
     expect(a.headers["x-request-id"]).toBe("abc-123");
     const b = await t.app.inject({ url: "/health?probe=live" });
     expect(b.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("GET /shows/:id with the short read cache on", () => {
+  it("serves repeated reads from the cache but reflects this instance's own reserve and cancel at once", async () => {
+    const c = await makeApp({ SHOW_STATE_CACHE_MS: "60000" });
+    try {
+      const show = await c.createShow(["A1", "A2"]);
+      const tok = await c.token("alice");
+      expect(await c.show(show.id)).toMatchObject({ available: 2, confirmed: 0 });
+      const spy = vi.spyOn(c.ctx.pool, "query");
+      await Promise.all([c.show(show.id), c.show(show.id), c.show(show.id)]);
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+      const r = await c.reserve(tok, show.id, ["A1"], "cache-1");
+      expect(r.status).toBe(201);
+      expect(await c.show(show.id)).toMatchObject({ available: 1, confirmed: 1 });
+      expect((await c.cancel(tok, r.body.reservation_id)).status).toBe(200);
+      expect(await c.show(show.id)).toMatchObject({ available: 2, confirmed: 0 });
+    } finally {
+      await c.close();
+    }
   });
 });

@@ -56,7 +56,7 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
     REDIS_ENABLED: "true",
     JWT_SECRET: "test-jwt-secret",
     ADMIN_TOKEN,
-    LOG_LEVEL: "silent",
+    LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? "silent",
     PG_POOL_MAX: "20",
     ...env,
   });
@@ -66,7 +66,7 @@ export async function makeApp(env: Record<string, string> = {}): Promise<TestApp
   const ring = new LogRing(1000);
   const log = createLogger(config.logLevel, ring);
   const events = new EventBus();
-  const metrics = createMetrics(new ShowStatsRepository(pool), pool, config.metricsMaxShows);
+  const metrics = createMetrics(new ShowStatsRepository(pool), pool, config.metricsMaxShows, config.metricsCacheSeconds * 1000);
   const cache = new SeatCache(config, events);
   await cache.waitUntilReady(1500);
   const ctx: Ctx = {

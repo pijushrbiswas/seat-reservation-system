@@ -47,23 +47,15 @@ export interface Config {
   logsToken: string | undefined;
   /** Minimum log level (pino level name). */
   logLevel: string;
-  /** Maximum connections in the main Postgres pool. */
   /** How many recent log lines are kept in memory for `GET /logs`; the oldest is dropped first. */
   logBufferLines: number;
-  /** New Relic ingest license key; when unset, logs are not sent to New Relic. */
-  newRelicLicenseKey: string | undefined;
-  /** New Relic Log API URL for the account's region (US unless `NEW_RELIC_REGION=eu` or `NEW_RELIC_LOG_ENDPOINT` is set). */
-  newRelicLogEndpoint: string;
-  /** Name shown as the `service` attribute on logs and metrics in New Relic. */
-  newRelicAppName: string;
-  /** Whether metrics are also sent to New Relic (needs the license key; on by default when the key is set). */
-  newRelicMetricsEnabled: boolean;
-  /** New Relic Metric API URL for the account's region. */
-  newRelicMetricsEndpoint: string;
-  /** How often metrics are sent to New Relic, in seconds. */
-  newRelicMetricsIntervalSeconds: number;
   /** How many shows get per-show seat gauges (newest first); 0 means every show. */
   metricsMaxShows: number;
+  /** How long per-show seat gauges and `GET /stats` reuse one database read, in seconds. */
+  metricsCacheSeconds: number;
+  /** How long `GET /shows/:id` reuses a read, in milliseconds; 0 turns it off. A reserve or cancel on this instance clears it at once. */
+  showStateCacheMs: number;
+  /** Maximum connections in the main Postgres pool. */
   pgPoolMax: number;
   /** Whether to connect to Postgres over TLS. */
   pgSsl: boolean;
@@ -99,17 +91,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logsToken: env.LOGS_TOKEN || undefined,
     logLevel: env.LOG_LEVEL ?? "info",
     logBufferLines: int(env, "LOG_BUFFER_LINES", 50_000),
-    newRelicLicenseKey: env.NEW_RELIC_LICENSE_KEY || undefined,
-    newRelicLogEndpoint:
-      env.NEW_RELIC_LOG_ENDPOINT ||
-      (env.NEW_RELIC_REGION?.toLowerCase() === "eu" ? "https://log-api.eu.newrelic.com/log/v1" : "https://log-api.newrelic.com/log/v1"),
-    newRelicAppName: env.NEW_RELIC_APP_NAME || "seat-reservation",
-    newRelicMetricsEnabled: bool(env, "NEW_RELIC_METRICS_ENABLED", true),
-    newRelicMetricsEndpoint:
-      env.NEW_RELIC_METRICS_ENDPOINT ||
-      (env.NEW_RELIC_REGION?.toLowerCase() === "eu" ? "https://metric-api.eu.newrelic.com/metric/v1" : "https://metric-api.newrelic.com/metric/v1"),
-    newRelicMetricsIntervalSeconds: int(env, "NEW_RELIC_METRICS_INTERVAL_SECONDS", 15),
     metricsMaxShows: int(env, "METRICS_MAX_SHOWS", 0),
+    metricsCacheSeconds: int(env, "METRICS_CACHE_SECONDS", 1),
+    showStateCacheMs: int(env, "SHOW_STATE_CACHE_MS", 0),
     pgPoolMax: int(env, "PG_POOL_MAX", 20),
     pgSsl: bool(env, "PG_SSL", false),
     defaultPerUserLimit: int(env, "DEFAULT_PER_USER_LIMIT", 4),

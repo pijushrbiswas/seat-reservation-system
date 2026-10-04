@@ -20,8 +20,9 @@ export type MetricDecline = (typeof DECLINE_REASONS)[number];
  * @param stats - Database access for the seat gauges.
  * @param pool - Main Postgres pool, whose connection counts are exported as a gauge.
  * @param maxShows - How many of the newest shows get per-show seat gauges; 0 (the default) means every show.
+ * @param cacheMs - How long one database read of the seat stats is reused (default one second).
  */
-export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool, maxShows = 0) {
+export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool, maxShows = 0, cacheMs = 1000) {
   const registry = new client.Registry();
   client.collectDefaultMetrics({ register: registry });
 
@@ -78,7 +79,7 @@ export function createMetrics(stats: ShowStatsRepository, pool: pg.Pool, maxShow
   let statsCache: { at: number; promise: Promise<ShowStat[]> } | undefined;
   const loadShowSeatStats = (): Promise<ShowStat[]> => {
     const now = Date.now();
-    if (statsCache && now - statsCache.at < 1000) return statsCache.promise;
+    if (statsCache && now - statsCache.at < cacheMs) return statsCache.promise;
     const promise = (async () => {
       const showIds = await stats.findRecentShowIds(maxShows);
       const heldShowIds: string[] = [];

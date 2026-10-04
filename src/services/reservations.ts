@@ -111,7 +111,10 @@ export class ReservationService {
 
     try {
       const result = await this.confirmInDatabase(show, labels, reservationId, requestHash, input);
-      if (!result.replay) await this.cache.markSeatsConfirmed(show.id, labels, reservationId, token);
+      if (!result.replay) {
+        this.shows.invalidateShowState(show.id);
+        await this.cache.markSeatsConfirmed(show.id, labels, reservationId, token);
+      }
       else if (hold.kind === "acquired") await this.cache.releaseHold(show.id, labels, token);
       return result;
     } catch (err) {
@@ -144,13 +147,17 @@ export class ReservationService {
       if (!claimed) return this.returnOriginalReservation(tx, input, requestHash);
 
       await this.enforcePerUserLimit(tx, show, input.userId, labels.length);
-      await this.lockSeatsAndEnsureAvailable(tx, show.id, labels);
 
       const amount = show.price_paise * labels.length;
-      await tx.insertReservation({ id: reservationId, showId: show.id, userId: input.userId, seats: labels, amountPaise: amount });
-      const confirmed = await tx.confirmSeats(show.id, labels, reservationId, input.userId);
-      if (confirmed !== labels.length) throw new Error("invariant: locked seats changed under us");
-      await tx.attachReservationToKey(input.userId, input.idempotencyKey, reservationId);
+      const outcome = await tx.reserveSeats({
+        id: reservationId,
+        showId: show.id,
+        userId: input.userId,
+        seats: labels,
+        amountPaise: amount,
+        idempotencyKey: input.idempotencyKey,
+      });
+      if (!outcome.created) await this.explainDeclinedSeats(tx, show.id, labels, outcome.won);
 
       return {
         replay: false,
@@ -167,35 +174,34 @@ export class ReservationService {
   }
 
   /**
-   * Enforces the per-user limit: makes sure the user's counter row exists, then checks and takes the quota in one conditional update.
-   * That update locks the row, so one user's concurrent reserves run one after another and cannot overshoot.
+   * Enforces the per-user limit: one conditional upsert creates or bumps the user's counter row and locks it,
+   * so one user's concurrent reserves run one after another and cannot overshoot.
    * @param count - Number of seats being requested.
    * @throws {DeclineError} `per_user_limit` when the quota would be exceeded.
    */
   private async enforcePerUserLimit(tx: ReservationTx, show: ShowMeta, userId: string, count: number): Promise<void> {
-    await tx.ensureQuotaRow(show.id, userId);
     if (!(await tx.takeQuota(show.id, userId, count, show.per_user_limit))) throw perUserLimitDecline(show.per_user_limit);
   }
 
   /**
-   * The decision point. Locking the seat rows makes concurrent requests for a seat queue; the loser re-reads the committed row
-   * after the winner commits and sees it taken. All-or-nothing: one unavailable seat declines the whole request.
-   * @throws {DeclineError} `unknown_seat`, or `seat_taken` (carrying the current holders so Redis can be primed).
+   * Called when the all-or-nothing reserve statement could not lock every requested seat; always throws, which rolls the transaction back.
+   * The seats it could not lock are read back to say why: a label that does not exist, or a seat someone else holds
+   * (with its holders, so Redis can be primed).
+   * @param won - Labels that were available and locked by the statement; nothing was changed for them.
+   * @throws {DeclineError} `unknown_seat`, or `seat_taken`.
    */
-  private async lockSeatsAndEnsureAvailable(tx: ReservationTx, showId: string, labels: string[]): Promise<void> {
-    const rows = await tx.lockSeats(showId, labels);
-    if (rows.length !== labels.length) {
+  private async explainDeclinedSeats(tx: ReservationTx, showId: string, labels: string[], won: string[]): Promise<never> {
+    const locked = new Set(won);
+    const rest = labels.filter((l) => !locked.has(l));
+    if (rest.length === 0) throw new Error("invariant: reserve declined but every seat was available");
+    const rows = await tx.readSeats(showId, rest);
+    if (rows.length !== rest.length) {
       const found = new Set(rows.map((r) => r.label));
-      const missing = labels.filter((l) => !found.has(l));
+      const missing = rest.filter((l) => !found.has(l));
       throw new DeclineError("unknown_seat", `unknown seat(s): ${missing.join(", ")}`, { seats: missing });
     }
-    const taken = rows.filter((r) => r.status !== "available");
-    if (taken.length === 0) return;
-
-    const err = new DeclineError("seat_taken", `seat(s) already taken: ${taken.map((r) => r.label).join(", ")}`, {
-      seats: taken.map((r) => r.label),
-    });
-    err.holders = Object.fromEntries(taken.filter((r) => r.reservation_id).map((r) => [r.label, r.reservation_id!]));
+    const err = new DeclineError("seat_taken", `seat(s) already taken: ${rest.join(", ")}`, { seats: rest });
+    err.holders = Object.fromEntries(rows.filter((r) => r.reservation_id).map((r) => [r.label, r.reservation_id!]));
     throw err;
   }
 
@@ -217,15 +223,15 @@ export class ReservationService {
       if (row.status === "cancelled") return { changed: false, reservation: toReservationView(row) };
 
       await tx.releaseQuota(row.show_id, userId, row.seats.length);
-      if ((await tx.lockReservationSeats(row.show_id, row.id)) !== row.seats.length) {
+      if ((await tx.releaseSeats(row.show_id, row.id, row.seats)) !== row.seats.length) {
         throw new Error("invariant: reservation seats missing");
       }
-      await tx.releaseSeats(row.show_id, row.id);
       await tx.markReservationCancelled(row.id);
       return { changed: true, reservation: { ...toReservationView(row), status: "cancelled" as const } };
     });
     if (result.changed) {
       this.events.emit("reservation.cancelled");
+      this.shows.invalidateShowState(result.reservation.show_id);
       await this.cache.clearConfirmedMarkers(result.reservation.show_id, result.reservation.seats, reservationId);
     }
     return result;

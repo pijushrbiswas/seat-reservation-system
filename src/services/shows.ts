@@ -18,6 +18,22 @@ export interface ShowCounts {
   confirmed: number;
 }
 
+/** A show as returned by the API. `seats` is present only when the per-seat list was requested. */
+export interface ShowView {
+  id: string;
+  name: string;
+  price_paise: number;
+  per_user_limit: number;
+  total_seats: number;
+  available: number;
+  held: number;
+  confirmed: number;
+  counts: ShowCounts;
+  reconciled: boolean;
+  created_at: string;
+  seats?: SeatView[];
+}
+
 /** Validated input for creating a show. */
 export interface CreateShowInput {
   name: string;
@@ -43,6 +59,8 @@ export const isUuid = (s: string) => UUID_RE.test(s);
 export class ShowService {
   /** Show rows never change after creation, so they are cached for the life of the process. */
   private readonly metaCache = new Map<string, ShowMeta>();
+  /** Recent show-state reads (see `SHOW_STATE_CACHE_MS`), keyed by show id and whether seats were included. The promise is shared by concurrent readers. */
+  private readonly stateCache = new Map<string, { at: number; value: Promise<ShowView> }>();
 
   constructor(
     private readonly shows: ShowRepository,
@@ -91,7 +109,31 @@ export class ShowService {
    * @param includeSeats - Whether to include the per-seat list or counts only.
    * @throws 404 if the show does not exist.
    */
-  async getShowState(id: string, includeSeats: boolean) {
+  async getShowState(id: string, includeSeats: boolean): Promise<ShowView> {
+    const ttl = this.config.showStateCacheMs;
+    if (ttl <= 0) return this.loadShowState(id, includeSeats);
+    const key = `${id}:${includeSeats}`;
+    const now = Date.now();
+    const hit = this.stateCache.get(key);
+    if (hit && now - hit.at < ttl) return hit.value;
+    const entry = { at: now, value: this.loadShowState(id, includeSeats) };
+    this.stateCache.set(key, entry);
+    entry.value.catch(() => {
+      if (this.stateCache.get(key) === entry) this.stateCache.delete(key);
+    });
+    return entry.value;
+  }
+
+  /**
+   * Drops the cached state of a show, so the next read sees a reservation or cancellation that has just committed on this instance.
+   * @param id - Show id.
+   */
+  invalidateShowState(id: string): void {
+    this.stateCache.delete(`${id}:true`);
+    this.stateCache.delete(`${id}:false`);
+  }
+
+  private async loadShowState(id: string, includeSeats: boolean): Promise<ShowView> {
     const meta = await this.getShowMeta(id);
     const held = await this.cache.listHeldSeats(id);
     if (!includeSeats) {
@@ -107,7 +149,7 @@ export class ShowService {
    * @param seats - Per-seat statuses, when requested.
    * @param grouped - Pre-aggregated counts, when seats were not requested.
    */
-  private buildShowResponse(meta: ShowMeta, seats?: SeatView[], grouped?: StatusCountRow[]) {
+  private buildShowResponse(meta: ShowMeta, seats?: SeatView[], grouped?: StatusCountRow[]): ShowView {
     const counts: ShowCounts = { available: 0, held: 0, confirmed: 0 };
     if (seats) for (const s of seats) counts[s.status]++;
     if (grouped) for (const g of grouped) counts[g.status] = g.n;

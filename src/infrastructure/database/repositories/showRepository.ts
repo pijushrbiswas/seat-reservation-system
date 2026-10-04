@@ -73,7 +73,7 @@ export class ShowRepository {
    * @returns The show, or undefined if none exists.
    */
   async findShowById(id: string): Promise<ShowMeta | undefined> {
-    const { rows } = await this.pool.query<ShowMeta>(SELECT_SHOW_BY_ID, [id]);
+    const { rows } = await this.pool.query<ShowMeta>({ ...SELECT_SHOW_BY_ID, values: [id] });
     return rows[0];
   }
 
@@ -83,7 +83,7 @@ export class ShowRepository {
    * @param heldLabels - Seats currently held in Redis.
    */
   async countSeatsByStatus(showId: string, heldLabels: string[]): Promise<StatusCountRow[]> {
-    const { rows } = await this.pool.query<StatusCountRow>(COUNT_SEATS_BY_STATUS, [showId, heldLabels]);
+    const { rows } = await this.pool.query<StatusCountRow>({ ...COUNT_SEATS_BY_STATUS, values: [showId, heldLabels] });
     return rows;
   }
 
@@ -93,7 +93,7 @@ export class ShowRepository {
    * @param heldLabels - Seats currently held in Redis.
    */
   async listSeatsWithStatus(showId: string, heldLabels: string[]): Promise<SeatStatusRow[]> {
-    const { rows } = await this.pool.query<SeatStatusRow>(SELECT_SEATS_WITH_STATUS, [showId, heldLabels]);
+    const { rows } = await this.pool.query<SeatStatusRow>({ ...SELECT_SEATS_WITH_STATUS, values: [showId, heldLabels] });
     return rows;
   }
 }

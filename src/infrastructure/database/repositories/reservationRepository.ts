@@ -1,18 +1,14 @@
 import type pg from "pg";
 import { runInTransaction, type Db } from "../connection.js";
 import {
-  ATTACH_RESERVATION_TO_KEY,
   CLAIM_IDEMPOTENCY_KEY,
-  ENSURE_USER_QUOTA_ROW,
-  INSERT_RESERVATION,
-  LOCK_REQUESTED_SEATS,
   LOCK_RESERVATION_FOR_CANCEL,
-  LOCK_RESERVATION_SEATS,
   MARK_RESERVATION_CANCELLED,
-  MARK_SEATS_AVAILABLE,
-  MARK_SEATS_CONFIRMED,
+  RELEASE_RESERVATION_SEATS,
   RELEASE_USER_QUOTA,
+  RESERVE_SEATS,
   SELECT_ORIGINAL_RESERVATION_BY_KEY,
+  SELECT_SEAT_STATES,
   TAKE_USER_QUOTA,
 } from "../queries/reservations.js";
 
@@ -31,20 +27,28 @@ export interface ReplayRow extends ReservationRow {
   request_hash: string;
 }
 
-/** A locked seat row read while deciding a reservation. */
+/** A seat row read to explain why a reserve was declined. */
 export interface SeatRow {
   label: string;
   status: string;
   reservation_id: string | null;
 }
 
-/** Data for a new reservation row. */
+/** Data for a new reservation. */
 export interface NewReservation {
   id: string;
   showId: string;
   userId: string;
   seats: string[];
   amountPaise: number;
+  idempotencyKey: string;
+}
+
+/** Result of trying to win every requested seat. Nothing is changed unless `created` is true. */
+export interface ReserveOutcome {
+  created: boolean;
+  /** Labels that were available and locked by this attempt (all requested labels when `created`). */
+  won: string[];
 }
 
 /**
@@ -60,13 +64,8 @@ export class ReservationTx {
    * @returns True if this request claimed the key, false if it was already used.
    */
   async claimIdempotencyKey(userId: string, key: string, showId: string, requestHash: string): Promise<boolean> {
-    const result = await this.db.query(CLAIM_IDEMPOTENCY_KEY, [userId, key, showId, requestHash]);
+    const result = await this.db.query({ ...CLAIM_IDEMPOTENCY_KEY, values: [userId, key, showId, requestHash] });
     return result.rowCount === 1;
-  }
-
-  /** Records which reservation an idempotency key produced. */
-  async attachReservationToKey(userId: string, key: string, reservationId: string): Promise<void> {
-    await this.db.query(ATTACH_RESERVATION_TO_KEY, [userId, key, reservationId]);
   }
 
   /**
@@ -74,81 +73,71 @@ export class ReservationTx {
    * @returns The reservation and the hash of the request that created it, or undefined.
    */
   async findOriginalReservation(userId: string, key: string): Promise<ReplayRow | undefined> {
-    const { rows } = await this.db.query<ReplayRow>(SELECT_ORIGINAL_RESERVATION_BY_KEY, [userId, key]);
+    const { rows } = await this.db.query<ReplayRow>({ ...SELECT_ORIGINAL_RESERVATION_BY_KEY, values: [userId, key] });
     return rows[0];
   }
 
-  /** Makes sure the `(show, user)` quota counter row exists. */
-  async ensureQuotaRow(showId: string, userId: string): Promise<void> {
-    await this.db.query(ENSURE_USER_QUOTA_ROW, [showId, userId]);
-  }
-
   /**
-   * Checks and takes the quota in one conditional update, which also locks the user's counter row.
+   * Creates the `(show, user)` quota row or adds to it, in one conditional statement that also locks the row.
    * @returns True if the quota was taken, false if it would exceed the limit.
    */
   async takeQuota(showId: string, userId: string, count: number, limit: number): Promise<boolean> {
-    const result = await this.db.query(TAKE_USER_QUOTA, [showId, userId, count, limit]);
+    const result = await this.db.query({ ...TAKE_USER_QUOTA, values: [showId, userId, count, limit] });
     return result.rowCount === 1;
   }
 
   /** Gives seats back to the user's quota. */
   async releaseQuota(showId: string, userId: string, count: number): Promise<void> {
-    await this.db.query(RELEASE_USER_QUOTA, [showId, userId, count]);
+    await this.db.query({ ...RELEASE_USER_QUOTA, values: [showId, userId, count] });
   }
 
   /**
-   * Locks the requested seat rows in a fixed byte order and returns them (the decision point).
+   * The decision point: locks the available requested seats in a fixed byte order and, only if every seat was won, confirms them,
+   * creates the reservation and attaches it to the idempotency key.
+   * @param reservation - The reservation to create; `seats` must be sorted and de-duplicated.
+   */
+  async reserveSeats(reservation: NewReservation): Promise<ReserveOutcome> {
+    const { rows } = await this.db.query<{ created: number; won: string[] }>({
+      ...RESERVE_SEATS,
+      values: [
+        reservation.showId,
+        reservation.seats,
+        reservation.id,
+        reservation.userId,
+        reservation.amountPaise,
+        reservation.idempotencyKey,
+      ],
+    });
+    return { created: rows[0]!.created === 1, won: rows[0]!.won };
+  }
+
+  /**
+   * Reads seats without locking them, to explain a declined reserve.
    * @returns The rows that exist; fewer than requested means some labels are unknown.
    */
-  async lockSeats(showId: string, labels: string[]): Promise<SeatRow[]> {
-    const { rows } = await this.db.query<SeatRow>(LOCK_REQUESTED_SEATS, [showId, labels]);
+  async readSeats(showId: string, labels: string[]): Promise<SeatRow[]> {
+    const { rows } = await this.db.query<SeatRow>({ ...SELECT_SEAT_STATES, values: [showId, labels] });
     return rows;
-  }
-
-  /** Inserts a confirmed reservation. */
-  async insertReservation(reservation: NewReservation): Promise<void> {
-    await this.db.query(INSERT_RESERVATION, [
-      reservation.id,
-      reservation.showId,
-      reservation.userId,
-      reservation.seats,
-      reservation.amountPaise,
-    ]);
-  }
-
-  /**
-   * Flips locked seats to confirmed, guarded on `status = 'available'`.
-   * @returns How many seats were updated.
-   */
-  async confirmSeats(showId: string, labels: string[], reservationId: string, userId: string): Promise<number> {
-    const result = await this.db.query(MARK_SEATS_CONFIRMED, [showId, labels, reservationId, userId]);
-    return result.rowCount ?? 0;
   }
 
   /** Loads and locks a reservation for cancelling. */
   async lockReservation(reservationId: string): Promise<ReservationRow | undefined> {
-    const { rows } = await this.db.query<ReservationRow>(LOCK_RESERVATION_FOR_CANCEL, [reservationId]);
+    const { rows } = await this.db.query<ReservationRow>({ ...LOCK_RESERVATION_FOR_CANCEL, values: [reservationId] });
     return rows[0];
   }
 
   /**
-   * Locks the seats that still point at a reservation.
-   * @returns How many seats were locked.
+   * Locks the seats that still point at a reservation and returns them to available, clearing their owner.
+   * @returns How many seats were released.
    */
-  async lockReservationSeats(showId: string, reservationId: string): Promise<number> {
-    const result = await this.db.query(LOCK_RESERVATION_SEATS, [showId, reservationId]);
+  async releaseSeats(showId: string, reservationId: string, labels: string[]): Promise<number> {
+    const result = await this.db.query({ ...RELEASE_RESERVATION_SEATS, values: [showId, reservationId, labels] });
     return result.rowCount ?? 0;
-  }
-
-  /** Returns a reservation's seats to available and clears their owner. */
-  async releaseSeats(showId: string, reservationId: string): Promise<void> {
-    await this.db.query(MARK_SEATS_AVAILABLE, [showId, reservationId]);
   }
 
   /** Marks a reservation cancelled. */
   async markReservationCancelled(reservationId: string): Promise<void> {
-    await this.db.query(MARK_RESERVATION_CANCELLED, [reservationId]);
+    await this.db.query({ ...MARK_RESERVATION_CANCELLED, values: [reservationId] });
   }
 }
 

@@ -177,6 +177,12 @@ function printOutcomes(title: string, results: Res[], wallMs: number): void {
   const lat = results.map((r) => r.ms).sort((a, b) => a - b);
   console.log(`\n${title}`);
   for (const [k, v] of Object.entries(d).sort((a, b) => b[1] - a[1])) console.log(`  ${k.padEnd(28)} ${v}`);
+  // Which 5xx codes came back matters: 502/503/504 from a platform gateway mean the server was overloaded, 500 means a bug.
+  const codes = new Map<number, number>();
+  for (const r of results) if (r.status >= 500) codes.set(r.status, (codes.get(r.status) ?? 0) + 1);
+  if (codes.size) console.log(`  5xx by status: ${[...codes].sort((a, b) => a[0] - b[0]).map(([c, n]) => `${c}=${n}`).join(", ")}`);
+  const slow = results.filter((r) => r.status === 0 && r.error);
+  if (slow.length) console.log(`  network errors: ${[...new Set(slow.map((r) => r.error))].join(", ")}`);
   console.log(
     `  requests=${results.length}  wall=${(wallMs / 1000).toFixed(2)}s  rps=${Math.round(results.length / (wallMs / 1000))}` +
       `  latency p50/p95/p99 = ${percentile(lat, 50).toFixed(0)}/${percentile(lat, 95).toFixed(0)}/${percentile(lat, 99).toFixed(0)} ms`,

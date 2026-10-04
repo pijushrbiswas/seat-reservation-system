@@ -51,6 +51,54 @@ describe("reserve", () => {
     expect(unknownShow.status).toBe(404);
   });
 
+  it("reports an unknown label even when another requested seat is taken, and leaks nothing (Postgres alone decides)", async () => {
+    const pgOnly = await makeApp({ REDIS_ENABLED: "false" });
+    try {
+      const show = await pgOnly.createShow(["A1", "A2", "A3"]);
+      const [a, b] = [await pgOnly.token("alice"), await pgOnly.token("bob")];
+      expect((await pgOnly.reserve(a, show.id, ["A2"], "mix-a")).status).toBe(201);
+      const mixed = await pgOnly.reserve(b, show.id, ["A1", "A2", "Z9"], "mix-b");
+      expect(mixed.status).toBe(422);
+      expect(mixed.body.error).toMatchObject({ code: "unknown_seat", seats: ["Z9"] });
+      const taken = await pgOnly.reserve(b, show.id, ["A1", "A2"], "mix-c");
+      expect(taken.status).toBe(409);
+      expect(taken.body.error).toMatchObject({ code: "seat_taken", seats: ["A2"] });
+      expect(await pgOnly.show(show.id)).toMatchObject({ available: 2, confirmed: 1 });
+    } finally {
+      await pgOnly.close();
+    }
+  });
+
+  it("with Redis off, Postgres alone still sells each seat once under a stampede, with overlapping multi-seat requests", async () => {
+    const pgOnly = await makeApp({ REDIS_ENABLED: "false" });
+    try {
+      const show = await pgOnly.createShow(seatNames("S", 10), { per_user_limit: 4 });
+      const users = await Promise.all(Array.from({ length: 120 }, (_, i) => pgOnly.token(`stampede-${i}`)));
+      const results = await Promise.all(
+        users.map((tok, i) => pgOnly.reserve(tok, show.id, [`S${(i % 10) + 1}`, `S${((i + 1) % 10) + 1}`], `stampede-${i}`)),
+      );
+      expect(results.filter((r) => r.status >= 500)).toHaveLength(0);
+      const won = results.filter((r) => r.status === 201);
+      const seats = won.flatMap((r) => r.body.seats as string[]);
+      expect(new Set(seats).size).toBe(seats.length);
+      const after = await pgOnly.show(show.id);
+      expect(after.confirmed).toBe(seats.length);
+      assertReconciled(after);
+    } finally {
+      await pgOnly.close();
+    }
+  });
+
+  it("gives the quota back when a request is declined, so the user can still reserve up to the limit", async () => {
+    const show = await t.createShow(seatNames("Q", 6), { per_user_limit: 2 });
+    const [a, b] = [await t.token("alice"), await t.token("bob")];
+    expect((await t.reserve(a, show.id, ["Q1"], "quota-a")).status).toBe(201);
+    const declined = await t.reserve(b, show.id, ["Q1", "Q2"], "quota-b1");
+    expect(declined.status).toBe(409);
+    expect((await t.reserve(b, show.id, ["Q2", "Q3"], "quota-b2")).status).toBe(201);
+    expect((await t.reserve(b, show.id, ["Q4"], "quota-b3")).body.error.code).toBe("per_user_limit");
+  });
+
   it("requires a valid token", async () => {
     const show = await t.createShow(["A1"]);
     const none = await t.app.inject({ method: "POST", url: `/shows/${show.id}/reserve`, payload: { seats: ["A1"] } });

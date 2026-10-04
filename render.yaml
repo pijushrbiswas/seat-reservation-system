@@ -16,18 +16,16 @@ services:
           type: keyvalue
           name: seat-reservation-cache
           property: connectionString
-      - key: NEW_RELIC_LICENSE_KEY
-        sync: false
-      - key: NEW_RELIC_REGION
-        value: us
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_TOKEN
         generateValue: true
       - key: PG_POOL_MAX
-        value: "20"
+        value: "40"
       - key: LOG_LEVEL
         value: info
+      - key: SHOW_STATE_CACHE_MS
+        value: "250"
 
   # Redis-compatible store for seat leases. Losing it is safe: Postgres still decides every reservation.
   - type: keyvalue
