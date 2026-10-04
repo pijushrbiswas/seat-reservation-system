@@ -4,7 +4,7 @@
  * Usage: `npm run burst -- <BASE_URL>` (or `make burst BASE_URL=https://...`).
  *
  * Environment: `ADMIN_TOKEN` (default `dev-admin-token`), `HOT_USERS=500`, `USERS=5000`, `REQUESTS=20000`, `SEATS=5000`, `HOT_SEATS=10`,
- * `CONCURRENCY=1000`, `SCALE=1` (multiplies USERS, REQUESTS, HOT_USERS and SEATS).
+ * `CONCURRENCY=500`, `SCALE=1` (multiplies USERS, REQUESTS, HOT_USERS and SEATS).
  */
 import http from "node:http";
 import https from "node:https";
@@ -33,7 +33,7 @@ const SEATS = num("SEATS", 5000 * scale);
 /** How many seats attract half of all stampede requests. */
 const HOT_SEATS = Math.min(num("HOT_SEATS", 10), SEATS);
 /** Maximum requests in flight at once. */
-const CONCURRENCY = num("CONCURRENCY", 1000);
+const CONCURRENCY = num("CONCURRENCY", 500);
 /** Seat price in paise. */
 const PRICE = 25000;
 /** Per-user seat limit used by the test shows. */

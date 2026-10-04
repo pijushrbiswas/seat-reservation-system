@@ -169,7 +169,7 @@ Put settings in front of the command, for example `SCALE=0.1 make burst`. Every 
 | `REQUESTS` * | `20000` | `5000` | Phase 2: the total number of reserve requests, including retries and deliberately conflicting keys |
 | `SEATS` * | `5000` | `1000` | Phase 2: how many seats the show has. Fewer seats means more competition and more `seat_taken`. |
 | `HOT_SEATS` | `10` | `5` | Phase 2: how many seats are "popular". Half of all requests are aimed at these only. It can't be more than `SEATS`. |
-| `CONCURRENCY` | `1000` | `200` | The most requests the script keeps in flight at once. Lower it if the app is small or the network is slow (the free Render plan copes better with around `100` to `200`). |
+| `CONCURRENCY` | `500` | `200` | The most requests the script keeps in flight at once. Lower it if the app is small or the network is slow (the free Render plan copes better with around `100` to `200`). |
 | `BASE_URL` | `BASE`, else `http://localhost:8080` | `https://my-app.onrender.com` | Which app to test. `make burst` takes it from the `BASE` in your `.env`. |
 | `ADMIN_TOKEN` | `dev-admin-token` | `<token>` | The admin password the script uses to create its test shows. On a deployed app this must be that app's real token. |
 
