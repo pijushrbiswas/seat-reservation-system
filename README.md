@@ -142,7 +142,7 @@ curl -s -m 120 $BASE/health
 **3.** Run the full burst:
 
 ```bash
-make install            # once
+make burst 
 ```
 
 It runs four phases, prints the outcome counts (confirmed, declined by reason, 5xx), latency percentiles and the final reconciliation, and ends with `all checks passed`. The exit code is non-zero if any check fails.
