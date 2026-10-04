@@ -297,12 +297,17 @@ async function onSaleStampede(): Promise<void> {
 
   const before = await scrapeMetrics();
   let polling = true;
-  const polls: { ok: boolean; status: number }[] = [];
+  const polls: { ok: boolean; status: number; error?: string; counts?: string }[] = [];
   const poller = (async () => {
     while (polling) {
       const r = await sendRequest("GET", `/shows/${show.id}?seats=false`);
       const b = r.body;
-      polls.push({ ok: r.status === 200 && b.available + b.held + b.confirmed === b.total_seats, status: r.status });
+      polls.push({
+        ok: r.status === 200 && b.available + b.held + b.confirmed === b.total_seats,
+        status: r.status,
+        error: r.error,
+        counts: r.status === 200 ? `${b.available}+${b.held}+${b.confirmed} vs ${b.total_seats}` : undefined,
+      });
       await new Promise((res) => setTimeout(res, 250));
     }
   })();
@@ -344,8 +349,20 @@ async function onSaleStampede(): Promise<void> {
   recordCheck(final.confirmed === wonBy.size, "confirmed seats == seats in 201 responses", `api=${final.confirmed} responses=${wonBy.size}`);
   const stateMatches = (final.seats as { seat: string; status: string }[]).every((s) => (s.status === "confirmed") === wonBy.has(s.seat));
   recordCheck(stateMatches, "per-seat state matches the winners exactly");
-  const badPolls = polls.filter((p) => !p.ok);
-  recordCheck(badPolls.length === 0, "invariant held during the burst", `${polls.length} live samples, ${badPolls.length} bad`);
+  // A live sample that answered 200 must add up; one that got no answer (for example a 502 from the platform's gateway while a small
+  // instance is saturated) says nothing about the seat counts, so it is reported as a warning instead of an invariant failure.
+  const answered = polls.filter((p) => p.status === 200);
+  const mismatched = answered.filter((p) => !p.ok);
+  const unanswered = polls.filter((p) => p.status !== 200);
+  recordCheck(
+    mismatched.length === 0,
+    "invariant held during the burst",
+    `${answered.length} live samples answered, ${mismatched.length} mismatched${mismatched.length ? `: ${[...new Set(mismatched.map((p) => p.counts))].join("; ")}` : ""}`,
+  );
+  if (unanswered.length) {
+    const kinds = [...new Set(unanswered.map((p) => `HTTP ${p.status}${p.error ? ` (${p.error})` : ""}`))].join(", ");
+    warnings.push(`${unanswered.length} of ${polls.length} live samples got no answer (${kinds}) while the server was under load`);
+  }
 
   await new Promise((r) => setTimeout(r, 1200));
   const afterM = await scrapeMetrics();

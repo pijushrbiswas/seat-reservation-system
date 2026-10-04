@@ -1,6 +1,6 @@
 .PHONY: install build dev deps up down test burst
 
-BASE_URL ?= http://localhost:8080
+BASE_URL ?= $(or $(BASE),http://localhost:8080)
 
 install:
 	npm ci
